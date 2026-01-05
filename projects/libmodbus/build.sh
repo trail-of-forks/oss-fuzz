@@ -20,8 +20,16 @@ make all
 
 cp FuzzClient $OUT/FuzzClient
 cp FuzzServer $OUT/FuzzServer
+cp FuzzServerReply $OUT/FuzzServerReply
+cp FuzzDataConversion $OUT/FuzzDataConversion
+cp FuzzClientWrite $OUT/FuzzClientWrite
+cp FuzzRawRequest $OUT/FuzzRawRequest
+cp FuzzRtuFrame $OUT/FuzzRtuFrame
 
 pushd $SRC/oss-fuzz-bloat/libmodbus/
 cp FuzzClient_seed_corpus.zip $OUT/FuzzClient_seed_corpus.zip
 cp FuzzServer_seed_corpus.zip $OUT/FuzzServer_seed_corpus.zip
+# New harnesses can reuse existing seed corpora
+cp FuzzServer_seed_corpus.zip $OUT/FuzzServerReply_seed_corpus.zip
+cp FuzzClient_seed_corpus.zip $OUT/FuzzClientWrite_seed_corpus.zip
 popd
