@@ -62,17 +62,49 @@ void *Server(void *args){
     Fuzzer *fuzzer = (Fuzzer*)args;
     {
         int client;
-        char clientData[10240];
+        uint8_t request[256];
+        uint8_t response[MODBUS_TCP_MAX_ADU_LENGTH];
         struct sockaddr_in clientAddr;
         uint32_t clientSZ = sizeof(clientAddr);
+        int req_len, payload_len;
 
         client = accept(fuzzer->socket, (struct sockaddr*)&clientAddr, &clientSZ);
 
-        send(client, fuzzer->buffer, fuzzer->size, 0);
-        recv(client, clientData, sizeof(clientData), 0);
+        /* Set recv timeout to avoid blocking indefinitely */
+        struct timeval tv = {.tv_sec = 1, .tv_usec = 0};
+        setsockopt(client, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
 
-        send(client, fuzzer->buffer, fuzzer->size, 0);
-        recv(client, clientData, sizeof(clientData), 0);
+        /* Receive request first to extract header fields */
+        req_len = recv(client, request, sizeof(request), 0);
+        if (req_len >= 8) {
+            /* Echo MBAP header fields that must match for validation */
+            response[0] = request[0];  /* Transaction ID */
+            response[1] = request[1];
+            response[2] = 0x00;        /* Protocol ID */
+            response[3] = 0x00;
+            payload_len = 2 + fuzzer->size;
+            response[4] = (payload_len >> 8);
+            response[5] = payload_len & 0xFF;
+            response[6] = request[6];  /* Unit ID */
+            response[7] = request[7];  /* Function code */
+            memcpy(&response[8], fuzzer->buffer, fuzzer->size);
+            send(client, response, 8 + fuzzer->size, 0);
+        }
+
+        req_len = recv(client, request, sizeof(request), 0);
+        if (req_len >= 8) {
+            response[0] = request[0];
+            response[1] = request[1];
+            response[2] = 0x00;
+            response[3] = 0x00;
+            payload_len = 2 + fuzzer->size;
+            response[4] = (payload_len >> 8);
+            response[5] = payload_len & 0xFF;
+            response[6] = request[6];
+            response[7] = request[7];
+            memcpy(&response[8], fuzzer->buffer, fuzzer->size);
+            send(client, response, 8 + fuzzer->size, 0);
+        }
 
         shutdown(client,SHUT_RDWR);
         close(client);
