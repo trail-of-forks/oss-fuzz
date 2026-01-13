@@ -19,6 +19,9 @@ RUN apt-get update && \
     apt-get install -y make autoconf automake libtool zlib1g-dev
 
 RUN git clone --depth 1 https://github.com/madler/zlib.git
-RUN git clone -b master --depth 1 https://github.com/pnggroup/libpng.git
+# Pin to commit before Jan 12, 2026 when 3 new fuzzers were added to build.sh.
+# The example-libpng repo only has libpng_read_fuzzer, not the newer targets.
+RUN git clone https://github.com/pnggroup/libpng.git && \
+    cd libpng && git checkout 7a77762e6d952a90651cd404eb78ed65e7875746
 RUN cp libpng/contrib/oss-fuzz/build.sh $SRC
 WORKDIR libpng
