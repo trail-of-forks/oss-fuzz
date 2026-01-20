@@ -16,15 +16,16 @@ limitations under the License.
 #include <unistd.h>
 #include <string.h>
 #include <errno.h>
+#include <signal.h>
 #include <pthread.h>
 #include <sys/socket.h>
+#include <sys/time.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
 
 #include <modbus.h>
 #include "unit-test.h"
 
-#define PORT 8080
 #define kMinInputLength 9
 #define kMaxInputLength MODBUS_RTU_MAX_ADU_LENGTH
 
@@ -43,18 +44,39 @@ typedef struct Fuzzer Fuzzer;
 
 int client(Fuzzer *fuzzer);
 
-void fuzzinit(Fuzzer *fuzzer){
+int fuzzinit(Fuzzer *fuzzer){
     struct sockaddr_in server_addr;
+    socklen_t addr_len = sizeof(server_addr);
+
     fuzzer->socket = socket(AF_INET, SOCK_STREAM, 0);
+    if (fuzzer->socket < 0) {
+        return -1;
+    }
 
     server_addr.sin_family = AF_INET;
-    server_addr.sin_port = htons(fuzzer->port);
+    server_addr.sin_port = htons(0);  // Let OS assign port
     server_addr.sin_addr.s_addr = inet_addr("127.0.0.1");
 
     setsockopt(fuzzer->socket, SOL_SOCKET, SO_REUSEADDR, &(int){1}, sizeof(int));
 
-    bind(fuzzer->socket, (struct sockaddr*)&server_addr, sizeof(server_addr));
-    listen(fuzzer->socket,1);
+    if (bind(fuzzer->socket, (struct sockaddr*)&server_addr, sizeof(server_addr)) < 0) {
+        close(fuzzer->socket);
+        return -1;
+    }
+
+    // Get the assigned port
+    if (getsockname(fuzzer->socket, (struct sockaddr*)&server_addr, &addr_len) < 0) {
+        close(fuzzer->socket);
+        return -1;
+    }
+    fuzzer->port = ntohs(server_addr.sin_port);
+
+    if (listen(fuzzer->socket, 1) < 0) {
+        close(fuzzer->socket);
+        return -1;
+    }
+
+    return 0;
 }
 
 void *Server(void *args){
@@ -67,6 +89,14 @@ void *Server(void *args){
         uint32_t clientSZ = sizeof(clientAddr);
 
         client = accept(fuzzer->socket, (struct sockaddr*)&clientAddr, &clientSZ);
+        if (client < 0) {
+            pthread_exit(NULL);
+        }
+
+        // Set socket timeouts to avoid blocking indefinitely
+        struct timeval tv = {.tv_sec = 0, .tv_usec = 100000};  // 100ms
+        setsockopt(client, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+        setsockopt(client, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
 
         send(client, fuzzer->buffer, fuzzer->size, 0);
         recv(client, clientData, sizeof(clientData), 0);
@@ -89,21 +119,37 @@ void clean(Fuzzer *fuzzer){
 }
 
 extern int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
+    static int initialized = 0;
+    if (!initialized) {
+        signal(SIGPIPE, SIG_IGN);
+        initialized = 1;
+    }
 
     if (size < kMinInputLength || size > kMaxInputLength){
         return 0;
     }
 
     Fuzzer *fuzzer = (Fuzzer*)malloc(sizeof(Fuzzer));
-    fuzzer->port = PORT;
+    if (fuzzer == NULL) {
+        return 0;
+    }
+
+    fuzzer->port = 0;  // Will be set by fuzzinit
     fuzzer->size = size;
-    fuzzer->buffer = data;
+    fuzzer->buffer = (uint8_t*)data;
 
-    fuzzinit(fuzzer);
+    if (fuzzinit(fuzzer) < 0) {
+        free(fuzzer);
+        return 0;
+    }
 
-    pthread_create(&fuzzer->thread, NULL,Server,fuzzer);
+    if (pthread_create(&fuzzer->thread, NULL, Server, fuzzer) != 0) {
+        close(fuzzer->socket);
+        free(fuzzer);
+        return 0;
+    }
     client(fuzzer);
-    pthread_join(fuzzer->thread, NULL);/* To Avoid UAF*/
+    pthread_join(fuzzer->thread, NULL);  /* To Avoid UAF */
 
     clean(fuzzer);
     return 0;
@@ -123,6 +169,10 @@ int client(Fuzzer *fuzzer){
         fprintf(stderr, "Unable to allocate libmodbus context\n");
         return -1;
     }
+
+    // Set short timeouts for fuzzing (50ms response, 10ms byte)
+    modbus_set_response_timeout(ctx, 0, 50000);
+    modbus_set_byte_timeout(ctx, 0, 10000);
 
     if (modbus_connect(ctx) == -1) {
         fprintf(stderr, "Connection failed: %s\n", modbus_strerror(errno));

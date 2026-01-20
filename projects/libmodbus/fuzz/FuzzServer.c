@@ -16,21 +16,23 @@ limitations under the License.
 #include <unistd.h>
 #include <string.h>
 #include <stddef.h>
+#include <signal.h>
+#include <time.h>
 #include <pthread.h>
 #include <arpa/inet.h>
 #include <sys/socket.h>
+#include <sys/time.h>
 #include <netinet/in.h>
 #include <netinet/tcp.h>
 
 #include <modbus.h>
 #include "unit-test.h"
 
-#define PORT 8080
 #define kMinInputLength 9
 #define kMaxInputLength MODBUS_RTU_MAX_ADU_LENGTH
 
 struct Fuzzer{
-    uint16_t    port;    
+    uint16_t    port;
     char*       file;
 
     FILE*       inFile;
@@ -39,52 +41,115 @@ struct Fuzzer{
 
     pthread_t   thread;
     int         socket;
+
+    // Synchronization for dynamic port
+    pthread_mutex_t ready_mutex;
+    pthread_cond_t  ready_cond;
+    int             server_ready;
 };
 typedef struct Fuzzer Fuzzer;
 
 int server(Fuzzer *fuzzer);
 
-void *client(void *args){ 
+void *client(void *args){
 
     Fuzzer *fuzzer = (Fuzzer*)args;
     int sockfd;
     struct sockaddr_in serv_addr;
 
+    // Wait for server to be ready with port assigned
+    pthread_mutex_lock(&fuzzer->ready_mutex);
+    while (fuzzer->server_ready == 0) {
+        struct timespec ts;
+        clock_gettime(CLOCK_REALTIME, &ts);
+        ts.tv_nsec += 100000000;  // 100ms timeout
+        if (ts.tv_nsec >= 1000000000) {
+            ts.tv_sec++;
+            ts.tv_nsec -= 1000000000;
+        }
+        int rc = pthread_cond_timedwait(&fuzzer->ready_cond, &fuzzer->ready_mutex, &ts);
+        if (rc == ETIMEDOUT) {
+            pthread_mutex_unlock(&fuzzer->ready_mutex);
+            pthread_exit(NULL);
+        }
+    }
+    // Check if server failed
+    if (fuzzer->server_ready < 0) {
+        pthread_mutex_unlock(&fuzzer->ready_mutex);
+        pthread_exit(NULL);
+    }
+    uint16_t port = fuzzer->port;
+    pthread_mutex_unlock(&fuzzer->ready_mutex);
+
     sockfd = socket(AF_INET, SOCK_STREAM, 0);
+    if (sockfd < 0) {
+        pthread_exit(NULL);
+    }
+
+    // Set send timeout
+    struct timeval tv = {.tv_sec = 0, .tv_usec = 100000};  // 100ms
+    setsockopt(sockfd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
+
     serv_addr.sin_family = AF_INET;
-    serv_addr.sin_port = htons(fuzzer->port);
+    serv_addr.sin_port = htons(port);
     serv_addr.sin_addr.s_addr = inet_addr("127.0.0.1");
 
-    while(1){/* Try until connect*/
-        if (connect(sockfd, (struct sockaddr *)&serv_addr, sizeof(serv_addr)) < 0){
-            continue;
-        }else{
-            break;
+    // Bounded retry with small delays
+    int connected = 0;
+    for (int attempt = 0; attempt < 100 && !connected; attempt++) {
+        if (connect(sockfd, (struct sockaddr *)&serv_addr, sizeof(serv_addr)) == 0) {
+            connected = 1;
+        } else {
+            usleep(1000);  // 1ms between retries
         }
     }
 
-    send(sockfd,fuzzer->buffer,fuzzer->size,0);
+    if (!connected) {
+        close(sockfd);
+        pthread_exit(NULL);
+    }
+
+    send(sockfd, fuzzer->buffer, fuzzer->size, 0);
 
     close(sockfd);
     pthread_exit(NULL);
 }
 
 extern int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
+    static int initialized = 0;
+    if (!initialized) {
+        signal(SIGPIPE, SIG_IGN);
+        initialized = 1;
+    }
 
     if (size < kMinInputLength || size > kMaxInputLength){
         return 0;
     }
 
     Fuzzer *fuzzer = (Fuzzer*)malloc(sizeof(Fuzzer));
-    fuzzer->port = PORT;
+    if (fuzzer == NULL) {
+        return 0;
+    }
 
+    fuzzer->port = 0;  // Will be set by server with dynamic port
     fuzzer->size = size;
-    fuzzer->buffer = data;
+    fuzzer->buffer = (uint8_t*)data;
+    fuzzer->server_ready = 0;
 
-    pthread_create(&fuzzer->thread, NULL,client,fuzzer);
+    pthread_mutex_init(&fuzzer->ready_mutex, NULL);
+    pthread_cond_init(&fuzzer->ready_cond, NULL);
+
+    if (pthread_create(&fuzzer->thread, NULL, client, fuzzer) != 0) {
+        pthread_mutex_destroy(&fuzzer->ready_mutex);
+        pthread_cond_destroy(&fuzzer->ready_cond);
+        free(fuzzer);
+        return 0;
+    }
     server(fuzzer);
-    pthread_join(fuzzer->thread, NULL); /* Avoid UAF*/
+    pthread_join(fuzzer->thread, NULL);  /* Avoid UAF */
 
+    pthread_mutex_destroy(&fuzzer->ready_mutex);
+    pthread_cond_destroy(&fuzzer->ready_cond);
     free(fuzzer);
     return 0;
 }
@@ -98,8 +163,30 @@ int server(Fuzzer *fuzzer)
     int i;
     uint8_t *query;
 
-    ctx = modbus_new_tcp("127.0.0.1", fuzzer->port);
+    // Use port 0 for dynamic port allocation
+    ctx = modbus_new_tcp("127.0.0.1", 0);
+    if (ctx == NULL) {
+        // Signal failure to client
+        pthread_mutex_lock(&fuzzer->ready_mutex);
+        fuzzer->server_ready = -1;
+        pthread_cond_signal(&fuzzer->ready_cond);
+        pthread_mutex_unlock(&fuzzer->ready_mutex);
+        return -1;
+    }
+
+    // Set short timeouts for fuzzing (50ms response, 10ms byte)
+    modbus_set_response_timeout(ctx, 0, 50000);
+    modbus_set_byte_timeout(ctx, 0, 10000);
+
     query = malloc(MODBUS_TCP_MAX_ADU_LENGTH);
+    if (query == NULL) {
+        modbus_free(ctx);
+        pthread_mutex_lock(&fuzzer->ready_mutex);
+        fuzzer->server_ready = -1;
+        pthread_cond_signal(&fuzzer->ready_cond);
+        pthread_mutex_unlock(&fuzzer->ready_mutex);
+        return -1;
+    }
 
     mb_mapping = modbus_mapping_new_start_address(
         UT_BITS_ADDRESS, UT_BITS_NB,
@@ -107,9 +194,12 @@ int server(Fuzzer *fuzzer)
         UT_REGISTERS_ADDRESS, UT_REGISTERS_NB_MAX,
         UT_INPUT_REGISTERS_ADDRESS, UT_INPUT_REGISTERS_NB);
     if (mb_mapping == NULL) {
-        fprintf(stderr, "Failed to allocate the mapping: %s\n",
-                modbus_strerror(errno));
+        free(query);
         modbus_free(ctx);
+        pthread_mutex_lock(&fuzzer->ready_mutex);
+        fuzzer->server_ready = -1;
+        pthread_cond_signal(&fuzzer->ready_cond);
+        pthread_mutex_unlock(&fuzzer->ready_mutex);
         return -1;
     }
 
@@ -123,6 +213,30 @@ int server(Fuzzer *fuzzer)
     }
 
     s = modbus_tcp_listen(ctx, 1);
+    if (s < 0) {
+        modbus_mapping_free(mb_mapping);
+        free(query);
+        modbus_free(ctx);
+        pthread_mutex_lock(&fuzzer->ready_mutex);
+        fuzzer->server_ready = -1;
+        pthread_cond_signal(&fuzzer->ready_cond);
+        pthread_mutex_unlock(&fuzzer->ready_mutex);
+        return -1;
+    }
+
+    // Get the dynamically assigned port
+    struct sockaddr_in addr;
+    socklen_t addr_len = sizeof(addr);
+    if (getsockname(s, (struct sockaddr*)&addr, &addr_len) == 0) {
+        fuzzer->port = ntohs(addr.sin_port);
+    }
+
+    // Signal that server is ready with port assigned
+    pthread_mutex_lock(&fuzzer->ready_mutex);
+    fuzzer->server_ready = 1;
+    pthread_cond_signal(&fuzzer->ready_cond);
+    pthread_mutex_unlock(&fuzzer->ready_mutex);
+
     modbus_tcp_accept(ctx, &s);
 
     rc = modbus_receive(ctx, query);
@@ -133,7 +247,6 @@ int server(Fuzzer *fuzzer)
 
     modbus_mapping_free(mb_mapping);
     free(query);
-    /* For RTU */
     modbus_close(ctx);
     modbus_free(ctx);
 
