@@ -17,8 +17,9 @@ limitations under the License.
 #include <string.h>
 #include <stddef.h>
 #include <signal.h>
-#include <time.h>
 #include <pthread.h>
+#include <stdatomic.h>
+#include <sched.h>
 #include <arpa/inet.h>
 #include <sys/socket.h>
 #include <sys/time.h>
@@ -31,230 +32,177 @@ limitations under the License.
 #define kMinInputLength 9
 #define kMaxInputLength MODBUS_RTU_MAX_ADU_LENGTH
 
-struct Fuzzer{
-    uint16_t    port;
-    char*       file;
+// Persistent state
+static int g_listen_fd = -1;
+static uint16_t g_port = 0;
+static modbus_mapping_t *g_mb_mapping = NULL;
+static uint8_t *g_query = NULL;
 
-    FILE*       inFile;
-    uint64_t    size;
-    uint8_t*    buffer;
+// Client thread state - using atomics for lock-free sync
+static pthread_t g_client_thread;
+static atomic_int g_state = 0;  // 0=idle, 1=work_ready, 2=work_done
+static atomic_int g_shutdown = 0;
+static const uint8_t *g_data = NULL;
+static size_t g_size = 0;
 
-    pthread_t   thread;
-    int         socket;
-
-    // Synchronization for dynamic port
-    pthread_mutex_t ready_mutex;
-    pthread_cond_t  ready_cond;
-    int             server_ready;
-};
-typedef struct Fuzzer Fuzzer;
-
-int server(Fuzzer *fuzzer);
-
-void *client(void *args){
-
-    Fuzzer *fuzzer = (Fuzzer*)args;
-    int sockfd;
+void *client_thread(void *args) {
+    (void)args;
     struct sockaddr_in serv_addr;
-
-    // Wait for server to be ready with port assigned
-    pthread_mutex_lock(&fuzzer->ready_mutex);
-    while (fuzzer->server_ready == 0) {
-        struct timespec ts;
-        clock_gettime(CLOCK_REALTIME, &ts);
-        ts.tv_nsec += 50000000;  // 50ms timeout
-        if (ts.tv_nsec >= 1000000000) {
-            ts.tv_sec++;
-            ts.tv_nsec -= 1000000000;
-        }
-        int rc = pthread_cond_timedwait(&fuzzer->ready_cond, &fuzzer->ready_mutex, &ts);
-        if (rc == ETIMEDOUT) {
-            pthread_mutex_unlock(&fuzzer->ready_mutex);
-            pthread_exit(NULL);
-        }
-    }
-    // Check if server failed
-    if (fuzzer->server_ready < 0) {
-        pthread_mutex_unlock(&fuzzer->ready_mutex);
-        pthread_exit(NULL);
-    }
-    uint16_t port = fuzzer->port;
-    pthread_mutex_unlock(&fuzzer->ready_mutex);
-
-    sockfd = socket(AF_INET, SOCK_STREAM, 0);
-    if (sockfd < 0) {
-        pthread_exit(NULL);
-    }
-
-    // Set send timeout
-    struct timeval tv = {.tv_sec = 0, .tv_usec = 20000};  // 20ms
-    setsockopt(sockfd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
-
     serv_addr.sin_family = AF_INET;
-    serv_addr.sin_port = htons(port);
     serv_addr.sin_addr.s_addr = inet_addr("127.0.0.1");
+    serv_addr.sin_port = htons(g_port);  // Fixed port, known at init
 
-    // Quick retry loop without sleeping - server should be ready
-    int connected = 0;
-    for (int attempt = 0; attempt < 10 && !connected; attempt++) {
-        if (connect(sockfd, (struct sockaddr *)&serv_addr, sizeof(serv_addr)) == 0) {
-            connected = 1;
+    while (!atomic_load(&g_shutdown)) {
+        // Spin-wait for work
+        while (atomic_load(&g_state) != 1) {
+            if (atomic_load(&g_shutdown)) return NULL;
+            sched_yield();
         }
-    }
-    if (!connected) {
-        close(sockfd);
-        pthread_exit(NULL);
+
+        const uint8_t *data = g_data;
+        size_t size = g_size;
+
+        // Connect and send
+        int sockfd = socket(AF_INET, SOCK_STREAM, 0);
+        if (sockfd >= 0) {
+            struct timeval tv = {.tv_sec = 0, .tv_usec = 50000};  // 50ms
+            setsockopt(sockfd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
+
+            if (connect(sockfd, (struct sockaddr *)&serv_addr, sizeof(serv_addr)) == 0) {
+                send(sockfd, data, size, 0);
+            }
+            close(sockfd);
+        }
+
+        // Signal done
+        atomic_store(&g_state, 2);
     }
 
-    send(sockfd, fuzzer->buffer, fuzzer->size, 0);
-
-    close(sockfd);
-    pthread_exit(NULL);
+    return NULL;
 }
 
-extern int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
-    static int initialized = 0;
-    if (!initialized) {
-        signal(SIGPIPE, SIG_IGN);
-        initialized = 1;
-    }
+int LLVMFuzzerInitialize(int *argc, char ***argv) {
+    (void)argc;
+    (void)argv;
 
-    if (size < kMinInputLength || size > kMaxInputLength){
-        return 0;
-    }
+    signal(SIGPIPE, SIG_IGN);
 
-    Fuzzer *fuzzer = (Fuzzer*)malloc(sizeof(Fuzzer));
-    if (fuzzer == NULL) {
-        return 0;
-    }
-
-    fuzzer->port = 0;  // Will be set by server with dynamic port
-    fuzzer->size = size;
-    fuzzer->buffer = (uint8_t*)data;
-    fuzzer->server_ready = 0;
-
-    pthread_mutex_init(&fuzzer->ready_mutex, NULL);
-    pthread_cond_init(&fuzzer->ready_cond, NULL);
-
-    if (pthread_create(&fuzzer->thread, NULL, client, fuzzer) != 0) {
-        pthread_mutex_destroy(&fuzzer->ready_mutex);
-        pthread_cond_destroy(&fuzzer->ready_cond);
-        free(fuzzer);
-        return 0;
-    }
-    server(fuzzer);
-    pthread_join(fuzzer->thread, NULL);  /* Avoid UAF */
-
-    pthread_mutex_destroy(&fuzzer->ready_mutex);
-    pthread_cond_destroy(&fuzzer->ready_cond);
-    free(fuzzer);
-    return 0;
-}
-
-int server(Fuzzer *fuzzer)
-{
-    int s = -1;
-    modbus_t *ctx;
-    modbus_mapping_t *mb_mapping;
-    int rc;
-    int i;
-    uint8_t *query;
-
-    // Use port 0 for dynamic port allocation
-    ctx = modbus_new_tcp("127.0.0.1", 0);
-    if (ctx == NULL) {
-        // Signal failure to client
-        pthread_mutex_lock(&fuzzer->ready_mutex);
-        fuzzer->server_ready = -1;
-        pthread_cond_signal(&fuzzer->ready_cond);
-        pthread_mutex_unlock(&fuzzer->ready_mutex);
+    // Create persistent listening socket
+    g_listen_fd = socket(AF_INET, SOCK_STREAM, 0);
+    if (g_listen_fd < 0) {
         return -1;
     }
 
-    // Set very short timeouts for fuzzing (10ms response, 5ms byte)
-    modbus_set_response_timeout(ctx, 0, 10000);
-    modbus_set_byte_timeout(ctx, 0, 5000);
+    int optval = 1;
+    setsockopt(g_listen_fd, SOL_SOCKET, SO_REUSEADDR, &optval, sizeof(optval));
 
-    query = malloc(MODBUS_TCP_MAX_ADU_LENGTH);
-    if (query == NULL) {
-        modbus_free(ctx);
-        pthread_mutex_lock(&fuzzer->ready_mutex);
-        fuzzer->server_ready = -1;
-        pthread_cond_signal(&fuzzer->ready_cond);
-        pthread_mutex_unlock(&fuzzer->ready_mutex);
+    struct sockaddr_in addr;
+    memset(&addr, 0, sizeof(addr));
+    addr.sin_family = AF_INET;
+    addr.sin_addr.s_addr = inet_addr("127.0.0.1");
+    addr.sin_port = htons(0);  // Ephemeral port
+
+    if (bind(g_listen_fd, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
+        close(g_listen_fd);
+        g_listen_fd = -1;
         return -1;
     }
 
-    mb_mapping = modbus_mapping_new_start_address(
+    // Get assigned port
+    socklen_t addr_len = sizeof(addr);
+    if (getsockname(g_listen_fd, (struct sockaddr *)&addr, &addr_len) == 0) {
+        g_port = ntohs(addr.sin_port);
+    }
+
+    if (listen(g_listen_fd, 5) < 0) {
+        close(g_listen_fd);
+        g_listen_fd = -1;
+        return -1;
+    }
+
+    // Set accept timeout
+    struct timeval tv = {.tv_sec = 0, .tv_usec = 100000};  // 100ms
+    setsockopt(g_listen_fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+
+    // Pre-allocate query buffer
+    g_query = malloc(MODBUS_TCP_MAX_ADU_LENGTH);
+
+    // Pre-allocate and initialize mapping
+    g_mb_mapping = modbus_mapping_new_start_address(
         UT_BITS_ADDRESS, UT_BITS_NB,
         UT_INPUT_BITS_ADDRESS, UT_INPUT_BITS_NB,
         UT_REGISTERS_ADDRESS, UT_REGISTERS_NB_MAX,
         UT_INPUT_REGISTERS_ADDRESS, UT_INPUT_REGISTERS_NB);
-    if (mb_mapping == NULL) {
-        free(query);
-        modbus_free(ctx);
-        pthread_mutex_lock(&fuzzer->ready_mutex);
-        fuzzer->server_ready = -1;
-        pthread_cond_signal(&fuzzer->ready_cond);
-        pthread_mutex_unlock(&fuzzer->ready_mutex);
-        return -1;
+
+    if (g_mb_mapping != NULL) {
+        modbus_set_bits_from_bytes(g_mb_mapping->tab_input_bits, 0, UT_INPUT_BITS_NB,
+                                   UT_INPUT_BITS_TAB);
+        for (int i = 0; i < UT_INPUT_REGISTERS_NB; i++) {
+            g_mb_mapping->tab_input_registers[i] = UT_INPUT_REGISTERS_TAB[i];
+        }
     }
 
-    /* Initialize input values that's can be only done server side. */
-    modbus_set_bits_from_bytes(mb_mapping->tab_input_bits, 0, UT_INPUT_BITS_NB,
-                               UT_INPUT_BITS_TAB);
+    // Start persistent client thread
+    pthread_create(&g_client_thread, NULL, client_thread, NULL);
 
-    /* Initialize values of INPUT REGISTERS */
-    for (i=0; i < UT_INPUT_REGISTERS_NB; i++) {
-        mb_mapping->tab_input_registers[i] = UT_INPUT_REGISTERS_TAB[i];
+    return 0;
+}
+
+extern int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
+    if (size < kMinInputLength || size > kMaxInputLength) {
+        return 0;
     }
 
-    s = modbus_tcp_listen(ctx, 1);
-    if (s < 0) {
-        modbus_mapping_free(mb_mapping);
-        free(query);
-        modbus_free(ctx);
-        pthread_mutex_lock(&fuzzer->ready_mutex);
-        fuzzer->server_ready = -1;
-        pthread_cond_signal(&fuzzer->ready_cond);
-        pthread_mutex_unlock(&fuzzer->ready_mutex);
-        return -1;
+    if (g_listen_fd < 0 || g_query == NULL || g_mb_mapping == NULL) {
+        return 0;
     }
 
-    // Get the dynamically assigned port
-    struct sockaddr_in addr;
-    socklen_t addr_len = sizeof(addr);
-    if (getsockname(s, (struct sockaddr*)&addr, &addr_len) == 0) {
-        fuzzer->port = ntohs(addr.sin_port);
+    // Signal client to connect
+    g_data = data;
+    g_size = size;
+    atomic_store(&g_state, 1);  // work_ready
+
+    // Accept connection
+    int client_fd = accept(g_listen_fd, NULL, NULL);
+    if (client_fd < 0) {
+        // Wait for client to finish
+        while (atomic_load(&g_state) != 2) {
+            sched_yield();
+        }
+        atomic_store(&g_state, 0);
+        return 0;
     }
 
-    // Set longer timeout on listening socket for accept()
-    struct timeval accept_tv = {.tv_sec = 0, .tv_usec = 200000};  // 200ms
-    setsockopt(s, SOL_SOCKET, SO_RCVTIMEO, &accept_tv, sizeof(accept_tv));
+    // Create modbus context and set the accepted socket
+    modbus_t *ctx = modbus_new_tcp(NULL, 0);
+    if (ctx == NULL) {
+        close(client_fd);
+        while (atomic_load(&g_state) != 2) {
+            sched_yield();
+        }
+        atomic_store(&g_state, 0);
+        return 0;
+    }
 
-    // Signal that server is ready with port assigned
-    pthread_mutex_lock(&fuzzer->ready_mutex);
-    fuzzer->server_ready = 1;
-    pthread_cond_signal(&fuzzer->ready_cond);
-    pthread_mutex_unlock(&fuzzer->ready_mutex);
+    modbus_set_socket(ctx, client_fd);
+    modbus_set_response_timeout(ctx, 0, 10000);
+    modbus_set_byte_timeout(ctx, 0, 5000);
 
-    modbus_tcp_accept(ctx, &s);
-
-    rc = modbus_receive(ctx, query);
+    // Receive and process
+    int rc = modbus_receive(ctx, g_query);
     if (rc > 0) {
-        // Process the request and generate response
-        // This exercises the entire modbus_reply() parsing logic for all function codes
-        modbus_reply(ctx, query, rc, mb_mapping);
+        modbus_reply(ctx, g_query, rc, g_mb_mapping);
     }
 
-    if (s != -1) {
-        close(s);
-    }
-
-    modbus_mapping_free(mb_mapping);
-    free(query);
-    modbus_close(ctx);
+    // Cleanup
+    close(client_fd);
     modbus_free(ctx);
 
-    return rc;
+    // Wait for client to finish
+    while (atomic_load(&g_state) != 2) {
+        sched_yield();
+    }
+    atomic_store(&g_state, 0);  // back to idle
+
+    return 0;
 }
