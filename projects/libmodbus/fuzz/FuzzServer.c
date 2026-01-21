@@ -62,7 +62,7 @@ void *client(void *args){
     while (fuzzer->server_ready == 0) {
         struct timespec ts;
         clock_gettime(CLOCK_REALTIME, &ts);
-        ts.tv_nsec += 100000000;  // 100ms timeout
+        ts.tv_nsec += 50000000;  // 50ms timeout
         if (ts.tv_nsec >= 1000000000) {
             ts.tv_sec++;
             ts.tv_nsec -= 1000000000;
@@ -87,23 +87,20 @@ void *client(void *args){
     }
 
     // Set send timeout
-    struct timeval tv = {.tv_sec = 0, .tv_usec = 100000};  // 100ms
+    struct timeval tv = {.tv_sec = 0, .tv_usec = 20000};  // 20ms
     setsockopt(sockfd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
 
     serv_addr.sin_family = AF_INET;
     serv_addr.sin_port = htons(port);
     serv_addr.sin_addr.s_addr = inet_addr("127.0.0.1");
 
-    // Bounded retry with small delays
+    // Quick retry loop without sleeping - server should be ready
     int connected = 0;
-    for (int attempt = 0; attempt < 100 && !connected; attempt++) {
+    for (int attempt = 0; attempt < 10 && !connected; attempt++) {
         if (connect(sockfd, (struct sockaddr *)&serv_addr, sizeof(serv_addr)) == 0) {
             connected = 1;
-        } else {
-            usleep(1000);  // 1ms between retries
         }
     }
-
     if (!connected) {
         close(sockfd);
         pthread_exit(NULL);
@@ -174,9 +171,9 @@ int server(Fuzzer *fuzzer)
         return -1;
     }
 
-    // Set short timeouts for fuzzing (50ms response, 10ms byte)
-    modbus_set_response_timeout(ctx, 0, 50000);
-    modbus_set_byte_timeout(ctx, 0, 10000);
+    // Set very short timeouts for fuzzing (10ms response, 5ms byte)
+    modbus_set_response_timeout(ctx, 0, 10000);
+    modbus_set_byte_timeout(ctx, 0, 5000);
 
     query = malloc(MODBUS_TCP_MAX_ADU_LENGTH);
     if (query == NULL) {
@@ -230,6 +227,10 @@ int server(Fuzzer *fuzzer)
     if (getsockname(s, (struct sockaddr*)&addr, &addr_len) == 0) {
         fuzzer->port = ntohs(addr.sin_port);
     }
+
+    // Set longer timeout on listening socket for accept()
+    struct timeval accept_tv = {.tv_sec = 0, .tv_usec = 200000};  // 200ms
+    setsockopt(s, SOL_SOCKET, SO_RCVTIMEO, &accept_tv, sizeof(accept_tv));
 
     // Signal that server is ready with port assigned
     pthread_mutex_lock(&fuzzer->ready_mutex);
