@@ -240,6 +240,11 @@ int server(Fuzzer *fuzzer)
     modbus_tcp_accept(ctx, &s);
 
     rc = modbus_receive(ctx, query);
+    if (rc > 0) {
+        // Process the request and generate response
+        // This exercises the entire modbus_reply() parsing logic for all function codes
+        modbus_reply(ctx, query, rc, mb_mapping);
+    }
 
     if (s != -1) {
         close(s);
