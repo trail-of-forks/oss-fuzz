@@ -134,9 +134,9 @@ extern int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
     /* Inject pipe read end as the "serial port" */
     modbus_set_socket(ctx, pipefd[0]);
 
-    /* Very short timeouts to avoid blocking */
-    modbus_set_response_timeout(ctx, 0, 5000);   /* 5ms */
-    modbus_set_byte_timeout(ctx, 0, 1000);       /* 1ms */
+    /* Minimal timeouts - data is already in pipe, just need select() to see it */
+    modbus_set_response_timeout(ctx, 0, 100);    /* 100us */
+    modbus_set_byte_timeout(ctx, 0, 100);        /* 100us */
 
     /* Set slave ID from fuzz input for filtering coverage */
     uint8_t slave_id = data[0];
