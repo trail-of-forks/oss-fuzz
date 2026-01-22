@@ -1,0 +1,166 @@
+# Modbus Protocol Dictionary for Fuzzing
+# Format: AFL/libFuzzer compatible
+
+# ============================================================
+# MBAP HEADER PATTERNS (TCP)
+# ============================================================
+
+# Transaction IDs
+tid_zero="\x00\x00"
+tid_one="\x00\x01"
+tid_max="\xff\xff"
+
+# Protocol ID - MUST be 0x0000
+protocol_id="\x00\x00"
+
+# Length patterns
+length_min="\x00\x01"
+length_typical="\x00\x06"
+length_max="\x00\xfd"
+
+# Unit/Slave IDs
+slave_broadcast="\x00"
+slave_one="\x01"
+slave_tcp="\xff"
+
+# Complete MBAP templates
+mbap_minimal="\x00\x01\x00\x00\x00\x06\x01"
+
+# ============================================================
+# FUNCTION CODES
+# ============================================================
+
+# Standard function codes
+fc_read_coils="\x01"
+fc_read_discrete_inputs="\x02"
+fc_read_holding_registers="\x03"
+fc_read_input_registers="\x04"
+fc_write_single_coil="\x05"
+fc_write_single_register="\x06"
+fc_read_exception_status="\x07"
+fc_write_multiple_coils="\x0f"
+fc_write_multiple_registers="\x10"
+fc_report_slave_id="\x11"
+fc_mask_write_register="\x16"
+fc_write_and_read_registers="\x17"
+
+# Exception function codes (FC + 0x80)
+fc_exc_01="\x81"
+fc_exc_02="\x82"
+fc_exc_03="\x83"
+fc_exc_04="\x84"
+fc_exc_05="\x85"
+fc_exc_06="\x86"
+fc_exc_0f="\x8f"
+fc_exc_10="\x90"
+fc_exc_11="\x91"
+fc_exc_16="\x96"
+fc_exc_17="\x97"
+
+# Invalid function codes
+fc_invalid_00="\x00"
+fc_invalid_ff="\xff"
+
+# ============================================================
+# EXCEPTION CODES
+# ============================================================
+
+exc_illegal_function="\x01"
+exc_illegal_data_address="\x02"
+exc_illegal_data_value="\x03"
+exc_slave_failure="\x04"
+exc_acknowledge="\x05"
+exc_slave_busy="\x06"
+exc_negative_ack="\x07"
+exc_memory_parity="\x08"
+exc_gateway_path="\x0a"
+exc_gateway_target="\x0b"
+
+# ============================================================
+# COIL VALUES - CRITICAL FOR FC 0x05
+# ============================================================
+
+# ONLY these two are valid!
+coil_on="\xff\x00"
+coil_off="\x00\x00"
+
+# Invalid values to test error handling
+coil_invalid_01="\x00\x01"
+coil_invalid_ff="\x00\xff"
+
+# ============================================================
+# QUANTITY LIMITS (boundary values)
+# ============================================================
+
+qty_min="\x00\x01"
+qty_zero="\x00\x00"
+
+# Max read bits: 2000 (0x07D0)
+qty_max_read_bits="\x07\xd0"
+qty_overflow_bits="\x07\xd1"
+
+# Max write bits: 1968 (0x07B0)
+qty_max_write_bits="\x07\xb0"
+
+# Max read registers: 125 (0x007D)
+qty_max_read_regs="\x00\x7d"
+qty_overflow_regs="\x00\x7e"
+
+# Max write registers: 123 (0x007B)
+qty_max_write_regs="\x00\x7b"
+
+# ============================================================
+# COMPLETE PDU PATTERNS
+# ============================================================
+
+# FC 0x01: Read Coils
+pdu_read_coils="\x01\x00\x00\x00\x01"
+pdu_read_coils_max="\x01\x00\x00\x07\xd0"
+
+# FC 0x03: Read Holding Registers
+pdu_read_holding="\x03\x00\x00\x00\x01"
+pdu_read_holding_max="\x03\x00\x00\x00\x7d"
+
+# FC 0x05: Write Single Coil
+pdu_write_coil_on="\x05\x00\x00\xff\x00"
+pdu_write_coil_off="\x05\x00\x00\x00\x00"
+
+# FC 0x06: Write Single Register
+pdu_write_register="\x06\x00\x00\x12\x34"
+
+# FC 0x07: Read Exception Status
+pdu_read_exc_status="\x07"
+
+# FC 0x11: Report Slave ID
+pdu_report_slave_id="\x11"
+
+# ============================================================
+# COMPLETE MESSAGE TEMPLATES
+# ============================================================
+
+# Read Coils request
+msg_read_coils="\x00\x01\x00\x00\x00\x06\x01\x01\x00\x00\x00\x01"
+
+# Write Single Coil ON
+msg_write_coil_on="\x00\x01\x00\x00\x00\x06\x01\x05\x00\x00\xff\x00"
+
+# Exception response
+msg_exception="\x00\x01\x00\x00\x00\x03\x01\x81\x01"
+
+# Read Holding Registers
+msg_read_holding="\x00\x01\x00\x00\x00\x06\x01\x03\x00\x00\x00\x0a"
+
+# Write Multiple Registers
+msg_write_regs="\x00\x01\x00\x00\x00\x0b\x01\x10\x00\x00\x00\x02\x04\x00\x0a\x01\x02"
+
+# Write and Read Registers
+msg_write_read="\x00\x01\x00\x00\x00\x11\x01\x17\x00\x00\x00\x02\x00\x00\x00\x02\x04\x00\x0a\x01\x02"
+
+# ============================================================
+# ADDRESS PATTERNS
+# ============================================================
+
+addr_zero="\x00\x00"
+addr_0x0130="\x01\x30"
+addr_0x0160="\x01\x60"
+addr_max="\xff\xff"
