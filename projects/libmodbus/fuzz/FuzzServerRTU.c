@@ -13,6 +13,9 @@ limitations under the License.
 /* FuzzServerRTU.c - Tests RTU backend with CRC-aware custom mutator
  * This fuzzer tests the RTU framing and CRC validation code paths
  * by using a custom mutator that ensures valid CRC-16 checksums.
+ *
+ * Uses pipe injection to feed fuzz data through the RTU backend,
+ * exercising modbus_receive() and modbus_reply() code paths.
  */
 
 #include <stdio.h>
@@ -23,6 +26,7 @@ limitations under the License.
 #include <string.h>
 #include <stddef.h>
 #include <signal.h>
+#include <fcntl.h>
 
 #include <modbus.h>
 #include "unit-test.h"
@@ -109,49 +113,63 @@ extern int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
         return 0;
     }
 
-    /* Create RTU context for direct message processing
-     * We use a dummy serial device path since we won't actually
-     * open the device - we'll feed data directly to modbus_receive_msg
-     */
-    modbus_t *ctx = modbus_new_rtu("/dev/null", 9600, 'N', 8, 1);
-    if (ctx == NULL) {
+    /* Create pipe for data injection */
+    int pipefd[2];
+    if (pipe(pipefd) == -1) {
         return 0;
     }
 
-    /* Set slave ID from input to test filtering */
-    uint8_t slave_id = (size > 0) ? data[0] : 1;
-    modbus_set_slave(ctx, slave_id);
+    /* Set read end to non-blocking to avoid hangs */
+    int flags = fcntl(pipefd[0], F_GETFL, 0);
+    fcntl(pipefd[0], F_SETFL, flags | O_NONBLOCK);
 
-    /* Copy input to query buffer for processing */
-    memcpy(g_query, data, size);
-
-    /* Test CRC validation and message processing
-     * The CRC should be valid due to our custom mutator
-     * This exercises:
-     * - modbus_crc16() verification
-     * - RTU header parsing
-     * - Slave ID filtering
-     * - Function code dispatch
-     */
-
-    /* Verify CRC manually to confirm our mutator works */
-    uint16_t received_crc = (g_query[size - 1] << 8) | g_query[size - 2];
-    uint16_t computed_crc = modbus_crc16(g_query, size - 2);
-
-    if (received_crc == computed_crc && size >= RTU_MIN_ADU) {
-        /* Valid CRC - process the PDU
-         * Extract function code and simulate reply generation
-         */
-        uint8_t fc = g_query[1];
-
-        /* Test modbus_reply_exception for RTU */
-        if (fc > 0x17 || fc == 0) {
-            /* Invalid function code - would generate exception */
-        }
-
-        /* For valid function codes, the mapping would be consulted */
+    /* Create RTU context */
+    modbus_t *ctx = modbus_new_rtu("/dev/null", 9600, 'N', 8, 1);
+    if (ctx == NULL) {
+        close(pipefd[0]);
+        close(pipefd[1]);
+        return 0;
     }
 
+    /* Inject pipe read end as the "serial port" */
+    modbus_set_socket(ctx, pipefd[0]);
+
+    /* Very short timeouts to avoid blocking */
+    modbus_set_response_timeout(ctx, 0, 5000);   /* 5ms */
+    modbus_set_byte_timeout(ctx, 0, 1000);       /* 1ms */
+
+    /* Set slave ID from fuzz input for filtering coverage */
+    uint8_t slave_id = data[0];
+    modbus_set_slave(ctx, slave_id);
+
+    /* Write fuzz data to pipe */
+    ssize_t written = write(pipefd[1], data, size);
+    (void)written;
+    close(pipefd[1]);  /* Close write end - signals EOF */
+
+    /* Process through libmodbus RTU backend
+     * This exercises:
+     * - _modbus_rtu_select()
+     * - _modbus_rtu_recv()
+     * - _modbus_rtu_check_integrity() - CRC validation
+     * - Slave ID filtering
+     * - Function code parsing
+     */
+    int rc = modbus_receive(ctx, g_query);
+
+    if (rc > 0) {
+        /* Valid request - exercise reply generation
+         * This exercises:
+         * - All FC handlers in modbus_reply()
+         * - _modbus_rtu_build_response_basis()
+         * - _modbus_rtu_send_msg_pre() - CRC computation
+         * - _modbus_rtu_send() - will fail on closed pipe, that's OK
+         */
+        modbus_reply(ctx, g_query, rc, g_mb_mapping);
+    }
+
+    /* Cleanup */
+    close(pipefd[0]);
     modbus_free(ctx);
 
     return 0;

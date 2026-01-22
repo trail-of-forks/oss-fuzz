@@ -6,7 +6,7 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 SEEDS_DIR="$SCRIPT_DIR/seeds"
 
-mkdir -p "$SEEDS_DIR/server" "$SEEDS_DIR/client" "$SEEDS_DIR/rtu"
+mkdir -p "$SEEDS_DIR/server" "$SEEDS_DIR/client" "$SEEDS_DIR/clientread" "$SEEDS_DIR/rtu"
 
 echo "Generating FuzzServer seeds (requests)..."
 
@@ -102,6 +102,35 @@ echo -ne '\x00\x0d\x00\x00\x00\x03\xff\x81\x02' > "$SEEDS_DIR/client/rsp_exc_ill
 echo -ne '\x00\x0e\x00\x00\x00\x03\xff\x81\x03' > "$SEEDS_DIR/client/rsp_exc_illegal_value.raw"
 echo -ne '\x00\x0f\x00\x00\x00\x03\xff\x81\x04' > "$SEEDS_DIR/client/rsp_exc_server_failure.raw"
 
+echo "Generating FuzzClientRead seeds (read operations with fuzzable payload)..."
+
+# FuzzClientRead seed format:
+# Byte 0: op selector (% 4 -> FC 0x01, 0x02, 0x03, 0x04)
+# Byte 1: quantity
+# Byte 2+: response payload data to fuzz
+
+# FC 0x01 - Read Coils (op=0)
+echo -ne '\x00\x0a' > "$SEEDS_DIR/clientread/read_coils_10.raw"
+echo -ne '\x00\x20\xff\xff\xaa\x55' > "$SEEDS_DIR/clientread/read_coils_32.raw"
+echo -ne '\x00\x08\xcd' > "$SEEDS_DIR/clientread/read_coils_8.raw"
+
+# FC 0x02 - Read Discrete Inputs (op=1)
+echo -ne '\x01\x10\xac\xdb\x35' > "$SEEDS_DIR/clientread/read_discrete_16.raw"
+echo -ne '\x01\x18\xff\x00\xff' > "$SEEDS_DIR/clientread/read_discrete_24.raw"
+
+# FC 0x03 - Read Holding Registers (op=2)
+echo -ne '\x02\x05\xaa\xbb\xcc\xdd\xee\xff\x11\x22\x33\x44' > "$SEEDS_DIR/clientread/read_holding_5.raw"
+echo -ne '\x02\x03\x02\x2b\x00\x01\x00\x64' > "$SEEDS_DIR/clientread/read_holding_3.raw"
+echo -ne '\x02\x01\x12\x34' > "$SEEDS_DIR/clientread/read_holding_1.raw"
+
+# FC 0x04 - Read Input Registers (op=3)
+echo -ne '\x03\x0a\x00\x0a\x00\x14\x00\x1e' > "$SEEDS_DIR/clientread/read_input_10.raw"
+echo -ne '\x03\x02\xde\xad\xbe\xef' > "$SEEDS_DIR/clientread/read_input_2.raw"
+
+# Edge cases - max quantities
+echo -ne '\x00\xc8\xff\xff\xff\xff\xff' > "$SEEDS_DIR/clientread/read_coils_max.raw"
+echo -ne '\x02\x7d\xaa\xaa\xaa\xaa' > "$SEEDS_DIR/clientread/read_holding_max.raw"
+
 echo "Generating RTU seeds (with CRC)..."
 
 # Helper function to append CRC to RTU message
@@ -156,6 +185,7 @@ cd "$SEEDS_DIR"
 zip -j FuzzServer_seed_corpus.zip server/*.raw
 zip -j FuzzClient_seed_corpus.zip client/*.raw
 zip -j FuzzClientWrite_seed_corpus.zip client/*.raw  # Same responses work for client write
+zip -j FuzzClientRead_seed_corpus.zip clientread/*.raw
 zip -j FuzzServerRTU_seed_corpus.zip rtu/*.raw
 
 # Move to parent directory
