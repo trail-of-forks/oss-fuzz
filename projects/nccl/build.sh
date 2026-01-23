@@ -20,7 +20,7 @@
 # compile with the OSS-Fuzz clang version.
 sed -i 's/-std=c++11 --expt-extended-lambda/-allow-unsupported-compiler -std=c++11 --expt-extended-lambda/g' ./makefiles/common.mk
 
-make clean
+make clean || true
 make -j3 src.build
 
 $CXX $LIB_FUZZING_ENGINE $CXXFLAGS $SRC/fuzz_xml.cpp -o $OUT/fuzz_xml \
