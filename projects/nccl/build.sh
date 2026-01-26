@@ -18,17 +18,29 @@
 # CUDA does not support clang versions above 10.0. This should not affect the
 # target of the fuzzers, however, during build we still need to allow it to
 # compile with the OSS-Fuzz clang version.
-sed -i 's/-std=c++11 --expt-extended-lambda/-allow-unsupported-compiler -std=c++11 --expt-extended-lambda/g' ./makefiles/common.mk
+sed -i 's/^NVCUFLAGS  :=/NVCUFLAGS  := -allow-unsupported-compiler/' ./makefiles/common.mk
+sed -i 's/^NVCUFLAGS_SYM += -ccbin/NVCUFLAGS_SYM += -allow-unsupported-compiler -ccbin/' \
+    ./src/device/Makefile
 
-make clean || true
+# The makefile has a target which is missing in the open-source repo
+sed -i 's/^TARGETS := debian txz doc/TARGETS := debian txz/' ./pkg/Makefile
+
+# NCCL requires libstdc++ (uses bits/c++config.h internal header)
+export CXXFLAGS="$CXXFLAGS -stdlib=libstdc++"
+
+# TODO: Remove this temporary fix once PR is merged: https://github.com/NVIDIA/nccl/pull/1971
+sed -i 's/cumemhandle(nullptr)/cumemhandle(0)/g' ./src/transport/net_ib/gdaki/gin_host_gdaki.cc
+
+make clean
 make -j3 src.build
 
-$CXX $LIB_FUZZING_ENGINE $CXXFLAGS $SRC/fuzz_xml.cpp -o $OUT/fuzz_xml \
-    -I./src/graph/ -I./src/include -I./build/include/ \
-    -I/usr/local/cuda-11.0/targets/x86_64-linux/include/ \
+$CXX $LIB_FUZZING_ENGINE $CXXFLAGS -DNCCL_OS_LINUX $SRC/fuzz_xml.cpp -o $OUT/fuzz_xml \
+    -I./src/graph/ -I./src/include -I./build/include/ -I./src/include/plugin -I./src/include/os  \
+    -I/usr/local/cuda-12.9/targets/x86_64-linux/include/ -latomic -lpthread -lrt -ldl \
     ./build/lib/libnccl_static.a \
-    /usr/local/cuda-11.0/targets/x86_64-linux/lib/libcudart.so
+    /usr/local/cuda-12.9/targets/x86_64-linux/lib/libcudart.so
 
-cp /usr/local/cuda-11.0/targets/x86_64-linux/lib/libcudart.so.11.0 $OUT/libcudart.so.11.0
-cp /usr/local/cuda-11.0/targets/x86_64-linux/lib/libcudart.so $OUT/libcudart.so
+cp /usr/local/cuda-12.9/targets/x86_64-linux/lib/libcudart.so.12.9.79 $OUT/libcudart.so.12.9.79
+cp /usr/local/cuda-12.9/targets/x86_64-linux/lib/libcudart.so.12 $OUT/libcudart.so.12
+cp /usr/local/cuda-12.9/targets/x86_64-linux/lib/libcudart.so $OUT/libcudart.so
 patchelf --set-rpath '$ORIGIN/' $OUT/fuzz_xml
