@@ -1,8 +1,6 @@
 #!/bin/bash -eu
 
 make clean CC="$CC" CXX="$CXX" CFLAGS="$CFLAGS" CXXFLAGS="$CXXFLAGS"
-make allyesconfig CC="$CC" CXX="$CXX" CFLAGS="$CFLAGS" CXXFLAGS="$CXXFLAGS"
-sed -i 's/^CONFIG_EXTRA_LDLIBS=.*/CONFIG_EXTRA_LDLIBS="dl audit cap-ng"/' .config
 make CC="$CC" CXX="$CXX" CFLAGS="$CFLAGS" CXXFLAGS="$CXXFLAGS"
 
 # Compile each fuzzing harness
@@ -10,6 +8,7 @@ make CC="$CC" CXX="$CXX" CFLAGS="$CFLAGS" CXXFLAGS="$CXXFLAGS"
 # $LIB_FUZZING_ENGINE links the fuzzing engine
 # $OUT is where fuzzer binaries should be placed
 
-# $CC $CFLAGS -I. -c harness.c -o harness.o
-# $CXX $CXXFLAGS $LIB_FUZZING_ENGINE harness.o \
-#     -L. -lyourlib -o $OUT/harness_fuzzer
+ar rcs libbusybox_static.a $(find . -name "*.o" ! -name "built-in.o")
+$CXX $CXXFLAGS -std=c++11 -Iinclude/ -I. \
+    $SRC/ar_harness.cpp libbusybox_static.a -lresolv -o $OUT/ar \
+    $LIB_FUZZING_ENGINE
