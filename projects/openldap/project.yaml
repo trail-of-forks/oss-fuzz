@@ -1,0 +1,17 @@
+homepage: "https://www.openldap.org/"
+language: c
+primary_contact: "opensource@trailofbits.com"
+vendor_ccs:
+  - "opensource@trailofbits.com"
+main_repo: 'https://git.openldap.org/openldap/openldap.git'
+sanitizers:
+  - address
+  - undefined
+  - memory
+architectures:
+  - x86_64
+  - i386
+fuzzing_engines:
+  - libfuzzer
+  - afl
+  - honggfuzz

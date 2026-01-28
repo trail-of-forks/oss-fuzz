@@ -1,0 +1,45 @@
+# Filter operators
+filter_and="(&"
+filter_or="(|"
+filter_not="(!"
+filter_eq="="
+filter_approx="~="
+filter_ge=">="
+filter_le="<="
+filter_present="=*"
+filter_substr_any="*"
+
+# Parentheses
+paren_open="("
+paren_close=")"
+
+# Common attribute names
+attr_objectclass="objectClass"
+attr_cn="cn"
+attr_uid="uid"
+attr_mail="mail"
+attr_sn="sn"
+attr_ou="ou"
+
+# Common values
+value_star="*"
+value_person="person"
+value_top="top"
+
+# Complete filters
+filter_simple="(objectClass=*)"
+filter_equality="(cn=test)"
+filter_and_example="(&(objectClass=person)(cn=test))"
+filter_or_example="(|(cn=test)(uid=test))"
+filter_not_example="(!(cn=test))"
+filter_substring="(cn=*test*)"
+filter_extensible="(cn:caseIgnoreMatch:=test)"
+
+# Extensible match components
+ext_dn=":dn"
+ext_rule=":caseIgnoreMatch"
+ext_rule_oid=":2.5.13.2"
+
+# Edge cases
+filter_escaped="(cn=test\\28\\29)"
+filter_nested="(&(&(cn=a)(cn=b))(&(cn=c)(cn=d)))"

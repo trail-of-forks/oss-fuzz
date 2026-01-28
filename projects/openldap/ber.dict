@@ -1,0 +1,78 @@
+# BER/ASN.1 primitive types (tag + length + minimal value)
+ber_boolean_true="\x01\x01\xff"
+ber_boolean_false="\x01\x01\x00"
+ber_integer_zero="\x02\x01\x00"
+ber_integer_one="\x02\x01\x01"
+ber_integer_neg="\x02\x01\xff"
+
+# Tags only (for mutation)
+ber_tag_boolean="\x01"
+ber_tag_integer="\x02"
+ber_bitstring="\x03"
+ber_octetstring="\x04"
+ber_null="\x05\x00"
+ber_oid="\x06"
+ber_utf8string="\x0c"
+ber_printablestring="\x13"
+ber_ia5string="\x16"
+ber_utctime="\x17"
+ber_generalizedtime="\x18"
+
+# BER constructed tags
+ber_sequence="\x30"
+ber_set="\x31"
+
+# LDAP application tags
+ldap_bind_request="\x60"
+ldap_bind_response="\x61"
+ldap_unbind_request="\x42"
+ldap_search_request="\x63"
+ldap_search_entry="\x64"
+ldap_search_done="\x65"
+ldap_modify_request="\x66"
+ldap_modify_response="\x67"
+ldap_add_request="\x68"
+ldap_add_response="\x69"
+ldap_delete_request="\x4a"
+ldap_delete_response="\x6b"
+ldap_moddn_request="\x6c"
+ldap_moddn_response="\x6d"
+ldap_compare_request="\x6e"
+ldap_compare_response="\x6f"
+ldap_abandon_request="\x50"
+ldap_extended_request="\x77"
+ldap_extended_response="\x78"
+ldap_intermediate_response="\x79"
+
+# BER length encodings
+ber_len_short="\x01"
+ber_len_medium="\x81\x80"
+ber_len_long="\x82\x01\x00"
+ber_len_indefinite="\x80"
+ber_len_eoc="\x00\x00"
+
+# LDAP filter tags
+ldap_filter_and="\xa0"
+ldap_filter_or="\xa1"
+ldap_filter_not="\xa2"
+ldap_filter_equality="\xa3"
+ldap_filter_substring="\xa4"
+ldap_filter_ge="\xa5"
+ldap_filter_le="\xa6"
+ldap_filter_present="\x87"
+ldap_filter_approx="\xa8"
+ldap_filter_extensible="\xa9"
+
+# Substring filter components
+ldap_substr_initial="\x80"
+ldap_substr_any="\x81"
+ldap_substr_final="\x82"
+
+# Context-specific tags
+ctx_0="\x80"
+ctx_1="\x81"
+ctx_2="\x82"
+ctx_3="\x83"
+ctx_constructed_0="\xa0"
+ctx_constructed_1="\xa1"
+ctx_constructed_2="\xa2"

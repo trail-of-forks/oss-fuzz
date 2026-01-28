@@ -1,0 +1,54 @@
+# RDN attribute types
+attr_cn="cn="
+attr_ou="ou="
+attr_o="o="
+attr_c="c="
+attr_dc="dc="
+attr_st="st="
+attr_l="l="
+attr_uid="uid="
+attr_mail="mail="
+attr_sn="sn="
+attr_givenName="givenName="
+attr_telephoneNumber="telephoneNumber="
+
+# RDN separators
+rdn_sep_comma=","
+rdn_sep_semicolon=";"
+rdn_sep_plus="+"
+
+# DCE format
+dce_slash="/"
+dce_start="/"
+
+# Escape sequences
+escape_comma="\\,"
+escape_plus="\\+"
+escape_quote="\\\""
+escape_backslash="\\\\"
+escape_hash="\\#"
+escape_space="\\ "
+escape_hex="\\41"
+
+# Binary value prefix
+binary_hash="#"
+
+# Quotes (LDAPv2)
+quote_double="\""
+
+# OID format
+oid_prefix="1.2.3.4.5="
+oid_cn="2.5.4.3="
+
+# Common DN patterns
+dn_simple="cn=test"
+dn_multi="cn=test,ou=users,dc=example,dc=com"
+dn_multi_valued="cn=test+uid=test,dc=example,dc=com"
+dn_escaped="cn=test\\,name,dc=example"
+dn_binary="cn=#414243"
+dn_unicode="cn=\xc3\xa9test"
+
+# Edge cases
+empty_value="cn="
+space_value="cn= "
+quoted_value="cn=\"test\""
