@@ -20,29 +20,37 @@ limitations under the License.
 #include "topo.h"
 #include "xml.h"
 
+typedef ncclResult_t (*xmlHandlerFunc_t)(FILE*, struct ncclXml*, struct ncclXmlNode*);
+struct xmlHandler {
+  const char * name;
+  xmlHandlerFunc_t func;
+};
+
+ncclResult_t xmlLoadSub(FILE* file, struct ncclXml* xml, struct ncclXmlNode* head, struct xmlHandler handlers[], int nHandlers);
+ncclResult_t ncclTopoXmlLoadSystem(FILE* file, struct ncclXml* xml, struct ncclXmlNode* head);
+
 extern "C" int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
   if (size < 10 || size > 50000) return 0;
 
-  char filename[256];
-  sprintf(filename, "/tmp/libfuzzer.%d", getpid());
-
-  FILE *fp = fopen(filename, "wb");
+  // Use fmemopen to create a FILE* from memory, avoiding disk I/O
+  FILE *fp = fmemopen((void *)data, size, "r");
   if (!fp) {
     return 0;
   }
-  fwrite(data, size, 1, fp);
-  fclose(fp);
 
   struct ncclXml *xml = nullptr;
   if (xmlAlloc(&xml, NCCL_TOPO_XML_MAX_NODES) != ncclSuccess) {
-    unlink(filename);
+    fclose(fp);
     return 0;
   }
 
-  ncclTopoGetXmlFromFile(filename, xml, 0);
+  // Parse directly from memory stream (same logic as ncclTopoGetXmlFromFile)
+  struct xmlHandler handlers[] = { { "system", ncclTopoXmlLoadSystem } };
+  xml->maxIndex = 0;
+  xmlLoadSub(fp, xml, NULL, handlers, 1);
 
   free(xml);
-  unlink(filename);
+  fclose(fp);
 
   return 0;
 }
