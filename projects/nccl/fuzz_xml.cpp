@@ -14,15 +14,15 @@ limitations under the License.
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 
 #include "core.h"
-#include "graph.h"
 #include "topo.h"
 #include "xml.h"
-#include <fcntl.h>
-#include <sys/stat.h>
 
 extern "C" int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
+  if (size < 10 || size > 50000) return 0;
+
   char filename[256];
   sprintf(filename, "/tmp/libfuzzer.%d", getpid());
 
@@ -33,11 +33,15 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
   fwrite(data, size, 1, fp);
   fclose(fp);
 
-  struct ncclXml *xml;
-  ncclCalloc(&xml, 1);
-  ncclTopoGetXmlFromFile(filename, xml, 1);
-  free(xml);
+  struct ncclXml *xml = nullptr;
+  if (xmlAlloc(&xml, NCCL_TOPO_XML_MAX_NODES) != ncclSuccess) {
+    unlink(filename);
+    return 0;
+  }
 
+  ncclTopoGetXmlFromFile(filename, xml, 0);
+
+  free(xml);
   unlink(filename);
 
   return 0;

@@ -34,13 +34,19 @@ sed -i 's/cumemhandle(nullptr)/cumemhandle(0)/g' ./src/transport/net_ib/gdaki/gi
 make clean
 make -j3 src.build
 
-$CXX $LIB_FUZZING_ENGINE $CXXFLAGS -DNCCL_OS_LINUX $SRC/fuzz_xml.cpp -o $OUT/fuzz_xml \
-    -I./src/graph/ -I./src/include -I./build/include/ -I./src/include/plugin -I./src/include/os  \
-    -I/usr/local/cuda-12.9/targets/x86_64-linux/include/ -latomic -lpthread -lrt -ldl \
-    ./build/lib/libnccl_static.a \
-    /usr/local/cuda-12.9/targets/x86_64-linux/lib/libcudart.so
+HARNESSES=(
+    fuzz_xml
+)
+
+for harness in "${HARNESSES[@]}"; do
+    $CXX $LIB_FUZZING_ENGINE $CXXFLAGS -DNCCL_OS_LINUX $SRC/${harness}.cpp -o $OUT/${harness} \
+        -I./src/graph/ -I./src/include -I./build/include/ -I./src/include/plugin -I./src/include/os \
+        -I/usr/local/cuda-12.9/targets/x86_64-linux/include/ -latomic -lpthread -lrt -ldl \
+        ./build/lib/libnccl_static.a \
+        /usr/local/cuda-12.9/targets/x86_64-linux/lib/libcudart.so
+    patchelf --set-rpath '$ORIGIN/' $OUT/${harness}
+done
 
 cp /usr/local/cuda-12.9/targets/x86_64-linux/lib/libcudart.so.12.9.79 $OUT/libcudart.so.12.9.79
 cp /usr/local/cuda-12.9/targets/x86_64-linux/lib/libcudart.so.12 $OUT/libcudart.so.12
 cp /usr/local/cuda-12.9/targets/x86_64-linux/lib/libcudart.so $OUT/libcudart.so
-patchelf --set-rpath '$ORIGIN/' $OUT/fuzz_xml
