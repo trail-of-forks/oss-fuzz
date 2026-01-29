@@ -2,11 +2,11 @@
 
 make clean CC="$CC" CXX="$CXX" CFLAGS="$CFLAGS" CXXFLAGS="$CXXFLAGS"
 yes "" | make oldconfig CC="$CC" CXX="$CXX" CFLAGS="$CFLAGS" CXXFLAGS="$CXXFLAGS"
-
-# Disable static linking - incompatible with ASan
 sed -i 's/CONFIG_STATIC=y/# CONFIG_STATIC is not set/' .config
-# Regenerate config after modification
-yes "" | make oldconfig CC="$CC" CXX="$CXX" CFLAGS="$CFLAGS" CXXFLAGS="$CXXFLAGS"
+sed -i 's/# CONFIG_USE_PORTABLE_CODE is not set/CONFIG_USE_PORTABLE_CODE=y/' .config
+sed -i 's/CONFIG_STATIC_LIBGCC=y/# CONFIG_STATIC_LIBGCC is not set/' .config
+sed -i 's/# CONFIG_AR is not set/CONFIG_AR=y/' .config
+
 make CC="$CC" CXX="$CXX" CFLAGS="$CFLAGS" CXXFLAGS="$CXXFLAGS" -j4
 
 # Compile each fuzzing harness
