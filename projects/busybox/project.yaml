@@ -1,12 +1,7 @@
 homepage: "https://www.busybox.net/"
 language: c
 primary_contact: "vda.linux@googlemail.com"
-sanitizers:
-  - address
-  - memory
-  - undefined
 main_repo: 'git://busybox.net/busybox.git'
-
 fuzzing_engines:
   - libfuzzer
 sanitizers:
