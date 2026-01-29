@@ -6,10 +6,38 @@
 #include <unistd.h>
 #include <fcntl.h>
 #include <sys/stat.h>
+#include <setjmp.h>
+
+// Jump buffer for catching busybox exit() calls
+static jmp_buf jump_buffer;
+static bool jump_set = false;
 
 // BusyBox headers
 extern "C" {
     int ar_main(int argc, char **argv);
+
+    // Stubs for appletlib symbols we excluded
+    const char *applet_name = "ar";
+
+    void bb_show_usage(void) {
+        if (jump_set) {
+            longjmp(jump_buffer, 1);
+        }
+    }
+
+    int string_array_len(char **argv) {
+        int count = 0;
+        while (argv && argv[count]) count++;
+        return count;
+    }
+
+    // Override xfunc_die to use longjmp instead of exit()
+    void xfunc_die(void) {
+        if (jump_set) {
+            longjmp(jump_buffer, 1);
+        }
+        _exit(1);  // Fallback if jump not set
+    }
 }
 
 // Temporary file counter for unique filenames
@@ -72,18 +100,16 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
     argv[argc] = NULL;
 
 
-    // Call the ar main function
-    // Note: We don't care about the return value for fuzzing purposes
-    ar_main(argc, argv);
+    // Call the ar main function with setjmp to catch exit() calls
+    jump_set = true;
+    if (setjmp(jump_buffer) == 0) {
+        ar_main(argc, argv);
+    }
+    // If we get here via longjmp, busybox tried to exit - that's fine
+    jump_set = false;
 
     // Clean up temporary files
     unlink(input_file);
-    
-    // Clean up any extracted files (ar may create them)
-    char cleanup_cmd[512];
-    snprintf(cleanup_cmd, sizeof(cleanup_cmd), 
-             "rm -f /tmp/fuzz_ar_* 2>/dev/null");
-    system(cleanup_cmd);
 
     return 0;
 }

@@ -9,3 +9,7 @@ main_repo: 'git://busybox.net/busybox.git'
 
 fuzzing_engines:
   - libfuzzer
+sanitizers:
+  - address
+env:
+  - ASAN_OPTIONS=detect_leaks=0
