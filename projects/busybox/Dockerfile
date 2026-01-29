@@ -6,3 +6,4 @@ RUN git clone --depth 1 git://busybox.net/busybox.git
 WORKDIR /src/busybox
 
 COPY build.sh *.cpp $SRC/
+COPY *.options $SRC/

@@ -18,3 +18,5 @@ ar rcs libbusybox_static.a $(find . -name "*.o" ! -name "built-in.o" ! -name "ap
 $CXX $CXXFLAGS -std=c++11 -Iinclude/ -I. \
     $SRC/ar_harness.cpp libbusybox_static.a -lresolv -o $OUT/ar \
     $LIB_FUZZING_ENGINE
+
+cp $SRC/*.options $OUT/
