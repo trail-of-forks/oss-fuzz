@@ -14,6 +14,9 @@ limitations under the License.
  * Exercises FC 0x01, 0x02, 0x03, 0x04 response parsing
  * Constructs valid MBAP headers to pass pre_check_confirmation() and
  * fuzzes the response payload data.
+ *
+ * For register reads (FC 0x03, 0x04), also exercises the data conversion
+ * functions (modbus_get_float_*) that convert register values to floats.
  */
 
 #include <stdio.h>
@@ -49,6 +52,10 @@ static atomic_int g_shutdown = 0;
 /* Fuzzer input for current iteration */
 static const uint8_t *g_fuzz_data = NULL;
 static size_t g_fuzz_size = 0;
+
+/* Sinks for float conversions to prevent optimization.
+ * Separate elements ensure each call is preserved. */
+static float g_float_sink[4];
 
 /* Build MBAP header that passes pre_check_confirmation() */
 static void build_mbap_header(uint8_t *rsp, const uint8_t *req, int pdu_length) {
@@ -212,8 +219,8 @@ extern int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
         if (qty == 0) qty = 1;
         if (qty > 200) qty = 200;  /* Use smaller value for faster fuzzing */
     } else {
-        /* Registers: max 125 */
-        if (qty == 0) qty = 1;
+        /* Registers: max 125, min 2 for float conversion */
+        if (qty < 2) qty = 2;
         if (qty > 125) qty = 125;
     }
 
@@ -252,10 +259,24 @@ extern int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
         modbus_read_input_bits(ctx, UT_INPUT_BITS_ADDRESS, qty, tab_bits);
         break;
     case 2: /* FC 0x03 - Read Holding Registers */
-        modbus_read_registers(ctx, UT_REGISTERS_ADDRESS, qty, tab_regs);
+        if (modbus_read_registers(ctx, UT_REGISTERS_ADDRESS, qty, tab_regs) >= 2) {
+            /* Exercise float conversion functions (modbus-data.c).
+             * Test all byte order variants. */
+            g_float_sink[0] = modbus_get_float_abcd(tab_regs);
+            g_float_sink[1] = modbus_get_float_dcba(tab_regs);
+            g_float_sink[2] = modbus_get_float_badc(tab_regs);
+            g_float_sink[3] = modbus_get_float_cdab(tab_regs);
+        }
         break;
     case 3: /* FC 0x04 - Read Input Registers */
-        modbus_read_input_registers(ctx, UT_INPUT_REGISTERS_ADDRESS, qty, tab_regs);
+        if (modbus_read_input_registers(ctx, UT_INPUT_REGISTERS_ADDRESS, qty, tab_regs) >= 2) {
+            /* Exercise float conversion functions (modbus-data.c).
+             * Test all byte order variants. */
+            g_float_sink[0] = modbus_get_float_abcd(tab_regs);
+            g_float_sink[1] = modbus_get_float_dcba(tab_regs);
+            g_float_sink[2] = modbus_get_float_badc(tab_regs);
+            g_float_sink[3] = modbus_get_float_cdab(tab_regs);
+        }
         break;
     }
 

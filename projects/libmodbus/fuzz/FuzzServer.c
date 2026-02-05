@@ -9,6 +9,13 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
 */
+
+/* FuzzServer.c - Tests server-side request processing
+ * Exercises modbus_receive() and modbus_reply() for all function codes.
+ * Also exercises the integer conversion macros (MODBUS_GET_INT32_FROM_INT16, etc.)
+ * on register data after write requests.
+ */
+
 #include <stdio.h>
 #include <errno.h>
 #include <stdlib.h>
@@ -37,6 +44,10 @@ static int g_listen_fd = -1;
 static uint16_t g_port = 0;
 static modbus_mapping_t *g_mb_mapping = NULL;
 static uint8_t *g_query = NULL;
+
+/* Sinks for integer conversions to prevent optimization. */
+static volatile int32_t g_int32_sink;
+static volatile int64_t g_int64_sink;
 
 // Client thread state - using atomics for lock-free sync
 static pthread_t g_client_thread;
@@ -192,6 +203,14 @@ extern int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
     int rc = modbus_receive(ctx, g_query);
     if (rc > 0) {
         modbus_reply(ctx, g_query, rc, g_mb_mapping);
+
+        /* Exercise integer conversion macros on register data. */
+        if (g_mb_mapping->nb_registers >= 2) {
+            g_int32_sink = MODBUS_GET_INT32_FROM_INT16(g_mb_mapping->tab_registers, 0);
+        }
+        if (g_mb_mapping->nb_registers >= 4) {
+            g_int64_sink = MODBUS_GET_INT64_FROM_INT16(g_mb_mapping->tab_registers, 0);
+        }
     }
 
     // Cleanup

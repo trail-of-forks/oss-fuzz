@@ -16,6 +16,8 @@ limitations under the License.
  *
  * Uses pipe injection to feed fuzz data through the RTU backend,
  * exercising modbus_receive() and modbus_reply() code paths.
+ * Also exercises the integer conversion macros on register data
+ * after write requests.
  */
 
 #include <stdio.h>
@@ -39,6 +41,10 @@ limitations under the License.
 /* Persistent state */
 static modbus_mapping_t *g_mb_mapping = NULL;
 static uint8_t *g_query = NULL;
+
+/* Sinks for integer conversions to prevent optimization. */
+static volatile int32_t g_int32_sink;
+static volatile int64_t g_int64_sink;
 
 /* External libFuzzer mutation function */
 extern size_t LLVMFuzzerMutate(uint8_t *Data, size_t Size, size_t MaxSize);
@@ -166,6 +172,14 @@ extern int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
          * - _modbus_rtu_send() - will fail on closed pipe, that's OK
          */
         modbus_reply(ctx, g_query, rc, g_mb_mapping);
+
+        /* Exercise integer conversion macros on register data. */
+        if (g_mb_mapping->nb_registers >= 2) {
+            g_int32_sink = MODBUS_GET_INT32_FROM_INT16(g_mb_mapping->tab_registers, 0);
+        }
+        if (g_mb_mapping->nb_registers >= 4) {
+            g_int64_sink = MODBUS_GET_INT64_FROM_INT16(g_mb_mapping->tab_registers, 0);
+        }
     }
 
     /* Cleanup */
