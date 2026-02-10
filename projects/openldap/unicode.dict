@@ -1,0 +1,171 @@
+# UTF-8 encoding edge cases for liblunicode fuzzing
+
+# === Valid UTF-8 boundaries ===
+
+# ASCII
+ascii_nul="\x00"
+ascii_del="\x7f"
+
+# 2-byte sequences (U+0080 - U+07FF)
+utf8_2byte_min="\xc2\x80"
+utf8_2byte_max="\xdf\xbf"
+
+# 3-byte sequences (U+0800 - U+FFFF)
+utf8_3byte_min="\xe0\xa0\x80"
+utf8_3byte_max="\xef\xbf\xbf"
+
+# 4-byte sequences (U+10000 - U+10FFFF)
+utf8_4byte_min="\xf0\x90\x80\x80"
+utf8_4byte_max="\xf4\x8f\xbf\xbf"
+
+# === Overlong sequences (invalid, should be rejected) ===
+
+# Overlong NUL (2-byte encoding of U+0000)
+overlong_2byte_nul="\xc0\x80"
+# Overlong slash (2-byte encoding of U+002F)
+overlong_2byte_slash="\xc0\xaf"
+# Max overlong 2-byte
+overlong_2byte_max="\xc1\xbf"
+# Overlong 3-byte encoding of U+0000
+overlong_3byte_nul="\xe0\x80\x80"
+# Overlong 3-byte encoding of U+007F
+overlong_3byte_7f="\xe0\x81\xbf"
+# Overlong 4-byte encoding of U+0000
+overlong_4byte_nul="\xf0\x80\x80\x80"
+# Overlong 4-byte encoding of U+FFFF
+overlong_4byte_ffff="\xf0\x8f\xbf\xbf"
+
+# === Surrogates (U+D800-U+DFFF, invalid in UTF-8) ===
+
+# High surrogate start (U+D800)
+surrogate_high_start="\xed\xa0\x80"
+# High surrogate end (U+DBFF)
+surrogate_high_end="\xed\xaf\xbf"
+# Low surrogate start (U+DC00)
+surrogate_low_start="\xed\xb0\x80"
+# Low surrogate end (U+DFFF)
+surrogate_low_end="\xed\xbf\xbf"
+# Surrogate pair (illegal in UTF-8)
+surrogate_pair="\xed\xa0\x80\xed\xb0\x80"
+
+# === Above maximum codepoint ===
+
+# U+110000 (one above max)
+above_max="\xf4\x90\x80\x80"
+# U+1FFFFF (max for 4-byte)
+above_max_4byte="\xf7\xbf\xbf\xbf"
+# 5-byte sequence (illegal in RFC 3629)
+illegal_5byte="\xf8\x80\x80\x80\x80"
+# 6-byte sequence (illegal in RFC 3629)
+illegal_6byte="\xfc\x80\x80\x80\x80\x80"
+
+# === Truncated sequences ===
+
+# 2-byte start without continuation
+trunc_2byte="\xc2"
+# 3-byte start, missing 1 continuation
+trunc_3byte_1="\xe0\xa0"
+# 3-byte start, missing 2 continuations
+trunc_3byte_2="\xe0"
+# 4-byte start, missing continuations
+trunc_4byte_1="\xf0\x90\x80"
+trunc_4byte_2="\xf0\x90"
+trunc_4byte_3="\xf0"
+
+# === Lone continuation bytes ===
+continuation_80="\x80"
+continuation_bf="\xbf"
+continuation_double="\x80\x80"
+
+# === BOM (Byte Order Mark) ===
+bom_utf8="\xef\xbb\xbf"
+
+# === Combining marks ===
+# U+0301 combining acute accent
+combining_acute="\xcc\x81"
+# U+0300 combining grave accent
+combining_grave="\xcc\x80"
+# U+0308 combining diaeresis
+combining_diaeresis="\xcc\x88"
+# U+0327 combining cedilla
+combining_cedilla="\xcc\xa7"
+# U+20DD combining enclosing circle
+combining_circle="\xe2\x83\x9d"
+# Multiple combining marks stacked
+combining_stack="\x61\xcc\x81\xcc\x88\xcc\xa7"
+
+# === Hangul syllables (decomposition/composition) ===
+# U+AC00 (Hangul syllable GA = L+V)
+hangul_ga="\xea\xb0\x80"
+# U+AC01 (Hangul syllable GAG = L+V+T)
+hangul_gag="\xea\xb0\x81"
+# U+D7A3 (last Hangul syllable)
+hangul_last="\xed\x9e\xa3"
+# Hangul jamo L (U+1100)
+jamo_l="\xe1\x84\x80"
+# Hangul jamo V (U+1161)
+jamo_v="\xe1\x85\xa1"
+# Hangul jamo T (U+11A8)
+jamo_t="\xe1\x86\xa8"
+# Decomposed Hangul (L + V + T)
+hangul_decomposed="\xe1\x84\x80\xe1\x85\xa1\xe1\x86\xa8"
+
+# === NFKC decomposition targets ===
+# U+00C0 (A with grave, canonical decomposable)
+a_grave="\xc3\x80"
+# U+00F1 (n with tilde)
+n_tilde="\xc3\xb1"
+# U+01FA (A with ring above and acute)
+a_ring_acute="\xc7\xba"
+# U+FB01 (fi ligature, compatibility decomposable)
+fi_ligature="\xef\xac\x81"
+# U+2126 (Ohm sign -> Omega)
+ohm_sign="\xe2\x84\xa6"
+# U+212B (Angstrom sign -> A with ring)
+angstrom="\xe2\x84\xab"
+# U+2160 (Roman numeral one -> I)
+roman_one="\xe2\x85\xa0"
+
+# === Case folding targets ===
+# U+00DF (sharp s -> ss)
+sharp_s="\xc3\x9f"
+# U+0130 (I with dot above -> i + combining dot)
+i_dot_above="\xc4\xb0"
+# U+017F (long s -> s)
+long_s="\xc5\xbf"
+
+# === Zero-width characters ===
+# U+200B (zero-width space)
+zwsp="\xe2\x80\x8b"
+# U+200C (zero-width non-joiner)
+zwnj="\xe2\x80\x8c"
+# U+200D (zero-width joiner)
+zwj="\xe2\x80\x8d"
+# U+FEFF (zero-width no-break space / BOM)
+zwnbsp="\xef\xbb\xbf"
+
+# === Noncharacters ===
+# U+FFFE
+nonchar_fffe="\xef\xbf\xbe"
+# U+FFFF
+nonchar_ffff="\xef\xbf\xbf"
+# U+FDD0
+nonchar_fdd0="\xef\xb7\x90"
+# U+FDEF
+nonchar_fdef="\xef\xb7\xaf"
+# U+1FFFE
+nonchar_1fffe="\xf0\x9f\xbf\xbe"
+
+# === Special characters ===
+# U+FFFD (replacement character)
+replacement="\xef\xbf\xbd"
+# U+E000 (private use area start)
+private_use="\xee\x80\x80"
+# U+0000 (null)
+null="\x00"
+
+# === Strings with interesting patterns ===
+# Single space
+space=" "
+# Two combining marks without base
+no_base_combining="\xcc\x81\xcc\x88"

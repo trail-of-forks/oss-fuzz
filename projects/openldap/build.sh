@@ -32,20 +32,22 @@ cd $SRC/openldap
 #     --without-tls \
 #     --disable-syslog
 
-# Build liblutil first (liblber depends on it), then liblber, then libldap
+# Build liblutil first (liblber depends on it), then liblber, libldap, liblunicode
 make -j$(nproc) depend
 make -j$(nproc) -C libraries/liblutil
 make -j$(nproc) -C libraries/liblber
 make -j$(nproc) -C libraries/libldap
+make -j$(nproc) -C libraries/liblunicode
 
 # Install headers and libraries in dependency order
 make -j$(nproc) -C include install
 make -j$(nproc) -C libraries/liblber install
 make -j$(nproc) -C libraries/libldap install
 
-# liblutil is not installed by make install, copy it manually from build dir
+# liblutil and liblunicode are not installed by make install, copy manually
 mkdir -p $SRC/openldap-install/lib
 cp $SRC/openldap/libraries/liblutil/liblutil.a $SRC/openldap-install/lib/
+cp $SRC/openldap/libraries/liblunicode/liblunicode.a $SRC/openldap-install/lib/
 
 # Build fuzzers
 # Note: Link order matters for static libraries - dependents before dependencies
@@ -55,9 +57,13 @@ LIBS="$SRC/openldap-install/lib/libldap.a \
       $SRC/openldap-install/lib/liblber.a \
       $SRC/openldap-install/lib/liblutil.a"
 
-# Add pthread if needed (some OpenLDAP configurations require it)
-# Uncomment if you see undefined references to pthread functions:
-# LIBS="$LIBS -lpthread"
+# liblunicode needs internal headers (ldap_pvt_uc.h is not installed)
+# Include paths: installed public headers, source internal headers, source root (for portable.h)
+INCLUDES_INTERNAL="-I$SRC/openldap-install/include -I$SRC/openldap/include -I$SRC/openldap"
+LIBS_UNICODE="$SRC/openldap-install/lib/liblunicode.a \
+              $SRC/openldap-install/lib/libldap.a \
+              $SRC/openldap-install/lib/liblber.a \
+              $SRC/openldap-install/lib/liblutil.a"
 
 # Tier 1: Server-exploitable harnesses (all use ber_get_next with sb_max_incoming)
 
@@ -81,6 +87,10 @@ $CXX $CXXFLAGS fuzz_slapd_nested.o $LIBS $LIB_FUZZING_ENGINE -o $OUT/fuzz_slapd_
 $CC $CFLAGS $INCLUDES -c $SRC/fuzz_slapd_types.c -o fuzz_slapd_types.o
 $CXX $CXXFLAGS fuzz_slapd_types.o $LIBS $LIB_FUZZING_ENGINE -o $OUT/fuzz_slapd_types
 
+# Unicode normalization (liblunicode)
+$CC $CFLAGS $INCLUDES_INTERNAL -c $SRC/fuzz_liblunicode_normalize.c -o fuzz_liblunicode_normalize.o
+$CXX $CXXFLAGS fuzz_liblunicode_normalize.o $LIBS_UNICODE $LIB_FUZZING_ENGINE -o $OUT/fuzz_liblunicode_normalize
+
 # Tier 2: Client library harnesses
 
 # DN parser (libldap client code)
@@ -95,6 +105,10 @@ $CXX $CXXFLAGS fuzz_libldap_url.o $LIBS $LIB_FUZZING_ENGINE -o $OUT/fuzz_libldap
 $CC $CFLAGS $INCLUDES -c $SRC/fuzz_libldap_url_filter.c -o fuzz_libldap_url_filter.o
 $CXX $CXXFLAGS fuzz_libldap_url_filter.o $LIBS $LIB_FUZZING_ENGINE -o $OUT/fuzz_libldap_url_filter
 
+# Build crash triage tool (standalone binary, not a fuzzer)
+$CC $CFLAGS $INCLUDES_INTERNAL -c $SRC/validate_unicode_crash.c -o validate_unicode_crash.o
+$CC $CFLAGS validate_unicode_crash.o $LIBS_UNICODE -o $OUT/validate_unicode_crash
+
 # Copy verification script
 cp $SRC/verify_crash.py $OUT/
 chmod +x $OUT/verify_crash.py
@@ -102,10 +116,14 @@ chmod +x $OUT/verify_crash.py
 # Copy dictionaries
 cp $SRC/*.dict $OUT/ 2>/dev/null || true
 
+# Associate unicode dictionary with the liblunicode harness
+cp $OUT/unicode.dict $OUT/fuzz_liblunicode_normalize.dict 2>/dev/null || true
+
 # Create seed corpora
 mkdir -p $OUT/fuzz_slapd_unauth_seed_corpus
 mkdir -p $OUT/fuzz_libldap_dn_seed_corpus
 mkdir -p $OUT/fuzz_libldap_url_seed_corpus
+mkdir -p $OUT/fuzz_liblunicode_normalize_seed_corpus
 
 # DN seeds from LDIF files (extract DN lines)
 for ldif in $SRC/openldap/tests/data/*.ldif; do
@@ -131,6 +149,21 @@ printf '\x30\x08\x30\x06\x30\x04\x30\x02\x05\x00' > $OUT/fuzz_slapd_unauth_seed_
 echo -n "ldap://localhost/dc=example,dc=com" > $OUT/fuzz_libldap_url_seed_corpus/basic
 echo -n "ldap://localhost:389/dc=example,dc=com?cn,sn?sub?(objectClass=*)" > $OUT/fuzz_libldap_url_seed_corpus/full
 echo -n "ldaps://localhost/dc=test??one?(cn=test)" > $OUT/fuzz_libldap_url_seed_corpus/ldaps
+
+# Unicode normalization seed corpus
+echo -n "Hello, World!" > $OUT/fuzz_liblunicode_normalize_seed_corpus/ascii
+printf '\xc3\x89\x74\x75\x64\x65' > $OUT/fuzz_liblunicode_normalize_seed_corpus/latin_accents
+printf '\x45\xcc\x81\x74\x75\x64\x65' > $OUT/fuzz_liblunicode_normalize_seed_corpus/latin_decomposed
+printf '\xe4\xb8\xad\xe6\x96\x87\xe6\xb5\x8b\xe8\xaf\x95' > $OUT/fuzz_liblunicode_normalize_seed_corpus/cjk
+printf '\xea\xb0\x80\xeb\x82\x98\xeb\x8b\xa4' > $OUT/fuzz_liblunicode_normalize_seed_corpus/hangul
+printf '\xe1\x84\x80\xe1\x85\xa1\xe1\x84\x82\xe1\x85\xa1\xe1\x84\x83\xe1\x85\xa1' > $OUT/fuzz_liblunicode_normalize_seed_corpus/hangul_jamo
+printf '\xd8\xa7\xd9\x84\xd8\xb9\xd8\xb1\xd8\xa8\xd9\x8a\xd8\xa9' > $OUT/fuzz_liblunicode_normalize_seed_corpus/arabic
+printf '\x41\x42\x43\xc3\xa9\xe4\xb8\xad\xf0\x9f\x98\x80' > $OUT/fuzz_liblunicode_normalize_seed_corpus/mixed
+printf '\xef\xac\x81\xef\xac\x82' > $OUT/fuzz_liblunicode_normalize_seed_corpus/compat_ligatures
+printf '\xc3\x9f\x53\x54\x52\x41\xc3\x9f\x45' > $OUT/fuzz_liblunicode_normalize_seed_corpus/casefold
+printf '\x61\xcc\x81\xcc\x88\xcc\xa7\xcc\x8c' > $OUT/fuzz_liblunicode_normalize_seed_corpus/multi_combining
+printf '\xef\xbb\xbf\x74\x65\x73\x74' > $OUT/fuzz_liblunicode_normalize_seed_corpus/bom_prefix
+printf '\x63\x6e\x3d\xc3\xa9\x74\x75\x64\x65\x2c\x64\x63\x3d\xe4\xb8\xad\xe6\x96\x87' > $OUT/fuzz_liblunicode_normalize_seed_corpus/dn_unicode
 
 # Zip seed corpora
 cd $OUT
