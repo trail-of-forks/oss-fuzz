@@ -1,0 +1,15 @@
+homepage: "https://www.symas.com/lmdb"
+language: c
+primary_contact: "opensource@trailofbits.com"
+vendor_ccs:
+  - "opensource@trailofbits.com"
+main_repo: 'https://github.com/LMDB/lmdb'
+sanitizers:
+  - address
+  - undefined
+architectures:
+  - x86_64
+fuzzing_engines:
+  - libfuzzer
+  - afl
+  - honggfuzz
