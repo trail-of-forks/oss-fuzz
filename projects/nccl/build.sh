@@ -50,3 +50,7 @@ done
 cp /usr/local/cuda-12.9/targets/x86_64-linux/lib/libcudart.so.12.9.79 $OUT/libcudart.so.12.9.79
 cp /usr/local/cuda-12.9/targets/x86_64-linux/lib/libcudart.so.12 $OUT/libcudart.so.12
 cp /usr/local/cuda-12.9/targets/x86_64-linux/lib/libcudart.so $OUT/libcudart.so
+
+# Remove build artifacts to save space
+rm -rf $OUT/src
+rm -rf $SRC/nccl/build

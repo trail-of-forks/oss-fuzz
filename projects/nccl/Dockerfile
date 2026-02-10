@@ -25,7 +25,8 @@ RUN mkdir $SRC/cuda-install && \
     wget https://developer.download.nvidia.com/compute/cuda/12.9.1/local_installers/cuda-repo-ubuntu2004-12-9-local_12.9.1-575.57.08-1_amd64.deb && \
     dpkg -i cuda-repo-ubuntu2004-12-9-local_12.9.1-575.57.08-1_amd64.deb && \
     cp /var/cuda-repo-ubuntu2004-12-9-local/cuda-AE7C1B4C-keyring.gpg /usr/share/keyrings/ && \
-    apt-get update -y && apt-get install cuda-toolkit-12-9 -y
+    apt-get update -y && apt-get install cuda-toolkit-12-9 -y && \
+    rm -rf $SRC/cuda-install
 
 RUN git clone --depth 1 https://github.com/NVIDIA/nccl nccl
 WORKDIR nccl
