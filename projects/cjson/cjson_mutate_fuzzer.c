@@ -119,7 +119,7 @@ int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size)
                     int arr_size = cJSON_GetArraySize(target);
                     if (arr_size > 0)
                     {
-                        cJSON_DeleteItemFromArray(target, (int)(op % (unsigned char)arr_size));
+                        cJSON_DeleteItemFromArray(target, (int)(op % arr_size));
                     }
                 }
                 break;

@@ -32,3 +32,7 @@ $CXX $CXXFLAGS $SRC/cjson_parse_fuzzer.c -I. \
 $CXX $CXXFLAGS $SRC/cjson_utils_fuzzer.c -I. \
     -o $OUT/cjson_utils_fuzzer \
     $LIB_FUZZING_ENGINE $SRC/cjson/build/libcjson_utils.a $SRC/cjson/build/libcjson.a
+
+$CXX $CXXFLAGS $SRC/cjson_mutate_fuzzer_2.c -I. \
+    -o $OUT/cjson_mutate_fuzzer_2 \
+    $LIB_FUZZING_ENGINE $SRC/cjson/build/libcjson.a
