@@ -1,0 +1,51 @@
+# LDIF dictionary for OpenLDAP LDIF parser fuzzing
+
+# DN attribute
+"dn: "
+"dn:: "
+
+# Change types
+"changetype: add"
+"changetype: modify"
+"changetype: delete"
+"changetype: modrdn"
+
+# Common attributes
+"objectClass: "
+"cn: "
+"sn: "
+"uid: "
+"mail: "
+"userPassword: "
+"description: "
+"telephoneNumber: "
+
+# Modification operations
+"add: "
+"delete: "
+"replace: "
+
+# Value indicators
+":: "
+":< "
+
+# Modification separator
+"-"
+
+# LDIF version
+"version: 1"
+
+# Line continuation (space after newline)
+"\x0a "
+
+# Common objectClasses
+"person"
+"organizationalPerson"
+"inetOrgPerson"
+"top"
+"organization"
+
+# DN components
+"dc=example,dc=com"
+"ou=people"
+"cn=test"

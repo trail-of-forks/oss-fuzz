@@ -1,0 +1,55 @@
+# Schema definition dictionary for OpenLDAP schema parser fuzzing
+
+# Delimiters
+"("
+")"
+"$ "
+
+# Schema keywords
+"NAME"
+"DESC"
+"SUP"
+"MUST"
+"MAY"
+"EQUALITY"
+"ORDERING"
+"SUBSTR"
+"SYNTAX"
+"SINGLE-VALUE"
+"COLLECTIVE"
+"NO-USER-MODIFICATION"
+"USAGE"
+"ABSTRACT"
+"STRUCTURAL"
+"AUXILIARY"
+"OBSOLETE"
+"APPLIES"
+"FORM"
+"OC"
+"X-"
+
+# Usage values
+"userApplications"
+"directoryOperation"
+"distributedOperation"
+"dSAOperation"
+
+# OID patterns
+"2.5.4.3"
+"2.5.6.6"
+"1.3.6.1.4.1"
+"1.3.6.1.4.1.1466.115.121.1.15"
+"2.5.13.2"
+
+# Quoted names
+"'cn'"
+"'commonName'"
+"'person'"
+"'top'"
+"'name'"
+"'sn'"
+"'caseIgnoreMatch'"
+
+# Extension prefix
+"X-ORIGIN"
+"X-ORDERED"

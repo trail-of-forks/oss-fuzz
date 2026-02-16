@@ -105,6 +105,34 @@ $CXX $CXXFLAGS fuzz_libldap_url.o $LIBS $LIB_FUZZING_ENGINE -o $OUT/fuzz_libldap
 $CC $CFLAGS $INCLUDES -c $SRC/fuzz_libldap_url_filter.c -o fuzz_libldap_url_filter.o
 $CXX $CXXFLAGS fuzz_libldap_url_filter.o $LIBS $LIB_FUZZING_ENGINE -o $OUT/fuzz_libldap_url_filter
 
+# Tier 3: Additional client library harnesses
+
+# Schema definition parser (libldap)
+$CC $CFLAGS $INCLUDES -c $SRC/fuzz_libldap_schema.c -o fuzz_libldap_schema.o
+$CXX $CXXFLAGS fuzz_libldap_schema.o $LIBS $LIB_FUZZING_ENGINE -o $OUT/fuzz_libldap_schema
+
+# LDIF record parser (libldap)
+$CC $CFLAGS $INCLUDES -c $SRC/fuzz_libldap_ldif.c -o fuzz_libldap_ldif.o
+$CXX $CXXFLAGS fuzz_libldap_ldif.o $LIBS $LIB_FUZZING_ENGINE -o $OUT/fuzz_libldap_ldif
+
+# Filter string -> BER encoder (libldap)
+# openldap.h is in the source include dir, not installed — needs INCLUDES_INTERNAL
+$CC $CFLAGS $INCLUDES_INTERNAL -c $SRC/fuzz_libldap_filter.c -o fuzz_libldap_filter.o
+$CXX $CXXFLAGS fuzz_libldap_filter.o $LIBS $LIB_FUZZING_ENGINE -o $OUT/fuzz_libldap_filter
+
+# Direct BER decoding via ber_init (liblber, no Sockbuf)
+$CC $CFLAGS $INCLUDES -c $SRC/fuzz_liblber_ber_init.c -o fuzz_liblber_ber_init.o
+$CXX $CXXFLAGS fuzz_liblber_ber_init.o $LIBS $LIB_FUZZING_ENGINE -o $OUT/fuzz_liblber_ber_init
+
+# BER encode-decode round-trip (liblber)
+$CC $CFLAGS $INCLUDES -c $SRC/fuzz_liblber_encode.c -o fuzz_liblber_encode.o
+$CXX $CXXFLAGS fuzz_liblber_encode.o $LIBS $LIB_FUZZING_ENGINE -o $OUT/fuzz_liblber_encode
+
+# Base64 decode/encode round-trip (liblutil)
+# Needs internal includes for lutil.h -> portable.h and ac/socket.h
+$CC $CFLAGS $INCLUDES_INTERNAL -c $SRC/fuzz_lutil_base64.c -o fuzz_lutil_base64.o
+$CXX $CXXFLAGS fuzz_lutil_base64.o $LIBS $LIB_FUZZING_ENGINE -o $OUT/fuzz_lutil_base64
+
 # Build crash triage tool (standalone binary, not a fuzzer)
 $CC $CFLAGS $INCLUDES_INTERNAL -c $SRC/validate_unicode_crash.c -o validate_unicode_crash.o
 $CC $CFLAGS validate_unicode_crash.o $LIBS_UNICODE -o $OUT/validate_unicode_crash
@@ -116,8 +144,14 @@ chmod +x $OUT/verify_crash.py
 # Copy dictionaries
 cp $SRC/*.dict $OUT/ 2>/dev/null || true
 
-# Associate unicode dictionary with the liblunicode harness
+# Associate dictionaries with harnesses
 cp $OUT/unicode.dict $OUT/fuzz_liblunicode_normalize.dict 2>/dev/null || true
+cp $OUT/schema.dict $OUT/fuzz_libldap_schema.dict 2>/dev/null || true
+cp $OUT/ldif.dict $OUT/fuzz_libldap_ldif.dict 2>/dev/null || true
+cp $OUT/filter.dict $OUT/fuzz_libldap_filter.dict 2>/dev/null || true
+cp $OUT/ber.dict $OUT/fuzz_liblber_ber_init.dict 2>/dev/null || true
+cp $OUT/ber.dict $OUT/fuzz_liblber_encode.dict 2>/dev/null || true
+cp $OUT/base64.dict $OUT/fuzz_lutil_base64.dict 2>/dev/null || true
 
 # Create seed corpora
 mkdir -p $OUT/fuzz_slapd_unauth_seed_corpus
@@ -164,6 +198,75 @@ printf '\xc3\x9f\x53\x54\x52\x41\xc3\x9f\x45' > $OUT/fuzz_liblunicode_normalize_
 printf '\x61\xcc\x81\xcc\x88\xcc\xa7\xcc\x8c' > $OUT/fuzz_liblunicode_normalize_seed_corpus/multi_combining
 printf '\xef\xbb\xbf\x74\x65\x73\x74' > $OUT/fuzz_liblunicode_normalize_seed_corpus/bom_prefix
 printf '\x63\x6e\x3d\xc3\xa9\x74\x75\x64\x65\x2c\x64\x63\x3d\xe4\xb8\xad\xe6\x96\x87' > $OUT/fuzz_liblunicode_normalize_seed_corpus/dn_unicode
+
+# Schema seed corpus
+mkdir -p $OUT/fuzz_libldap_schema_seed_corpus
+echo -n "( 2.5.6.6 NAME 'person' DESC 'RFC2256: a person' SUP top STRUCTURAL MUST ( sn \$ cn ) MAY ( userPassword \$ telephoneNumber \$ seeAlso \$ description ) )" > $OUT/fuzz_libldap_schema_seed_corpus/objectclass
+echo -n "( 2.5.4.3 NAME ( 'cn' 'commonName' ) DESC 'RFC4519: common name' SUP name )" > $OUT/fuzz_libldap_schema_seed_corpus/attributetype
+echo -n "( 1.3.6.1.4.1.1466.115.121.1.15 DESC 'Directory String' )" > $OUT/fuzz_libldap_schema_seed_corpus/syntax
+echo -n "( 2.5.13.2 NAME 'caseIgnoreMatch' SYNTAX 1.3.6.1.4.1.1466.115.121.1.15 )" > $OUT/fuzz_libldap_schema_seed_corpus/matchingrule
+echo -n "( 2.5.13.2 NAME 'caseIgnoreMatch' APPLIES ( cn \$ sn \$ description ) )" > $OUT/fuzz_libldap_schema_seed_corpus/matchingruleuse
+echo -n "( 2.5.6.6 NAME 'personContent' AUX posixAccount MUST uid MAY description )" > $OUT/fuzz_libldap_schema_seed_corpus/contentrule
+echo -n "( 1.3.6.1.4.1.99999.1 NAME 'personForm' OC person MUST cn )" > $OUT/fuzz_libldap_schema_seed_corpus/nameform
+echo -n "( 1 NAME 'personStructure' FORM personForm )" > $OUT/fuzz_libldap_schema_seed_corpus/structurerule
+
+# LDIF seed corpus
+mkdir -p $OUT/fuzz_libldap_ldif_seed_corpus
+for ldif in $SRC/openldap/tests/data/*.ldif; do
+    if [ -f "$ldif" ]; then
+        base=$(basename "$ldif" .ldif)
+        head -50 "$ldif" > "$OUT/fuzz_libldap_ldif_seed_corpus/$base" 2>/dev/null || true
+    fi
+done
+printf 'dn: cn=test,dc=example,dc=com\nobjectClass: person\ncn: test\nsn: user\n' > $OUT/fuzz_libldap_ldif_seed_corpus/simple_entry
+printf 'dn:: Y249dGVzdCxkYz1leGFtcGxlLGRjPWNvbQ==\nobjectClass: person\ncn: test\nsn: user\n' > $OUT/fuzz_libldap_ldif_seed_corpus/base64_dn
+printf 'dn: cn=test,dc=example,dc=com\nchangetype: modify\nadd: description\ndescription: test value\n-\n' > $OUT/fuzz_libldap_ldif_seed_corpus/modify_entry
+
+# Filter seed corpus
+mkdir -p $OUT/fuzz_libldap_filter_seed_corpus
+echo -n "(objectClass=*)" > $OUT/fuzz_libldap_filter_seed_corpus/present
+echo -n "(cn=test)" > $OUT/fuzz_libldap_filter_seed_corpus/equality
+echo -n "(&(objectClass=person)(cn=John*))" > $OUT/fuzz_libldap_filter_seed_corpus/and_substr
+echo -n "(|(uid=admin)(uid=root))" > $OUT/fuzz_libldap_filter_seed_corpus/or
+echo -n "(!(cn=disabled))" > $OUT/fuzz_libldap_filter_seed_corpus/not
+echo -n "(cn=test\\28with parens\\29)" > $OUT/fuzz_libldap_filter_seed_corpus/escaped
+echo -n "(cn:caseIgnoreMatch:=test)" > $OUT/fuzz_libldap_filter_seed_corpus/extensible
+echo -n "(cn>=M)" > $OUT/fuzz_libldap_filter_seed_corpus/greater_or_equal
+echo -n "(sn=*müller*)" > $OUT/fuzz_libldap_filter_seed_corpus/substring_utf8
+
+# BER init seed corpus (raw BER, no Sockbuf wrapper)
+mkdir -p $OUT/fuzz_liblber_ber_init_seed_corpus
+printf '\x30\x0c\x02\x01\x01\x60\x07\x02\x01\x03\x04\x00\x80\x00' > $OUT/fuzz_liblber_ber_init_seed_corpus/bind
+printf '\x02\x01\x01' > $OUT/fuzz_liblber_ber_init_seed_corpus/integer
+printf '\x04\x05hello' > $OUT/fuzz_liblber_ber_init_seed_corpus/string
+printf '\x30\x06\x02\x01\x01\x02\x01\x02' > $OUT/fuzz_liblber_ber_init_seed_corpus/seq_ints
+printf '\x01\x01\xff' > $OUT/fuzz_liblber_ber_init_seed_corpus/bool_true
+printf '\x01\x01\x00' > $OUT/fuzz_liblber_ber_init_seed_corpus/bool_false
+printf '\x05\x00' > $OUT/fuzz_liblber_ber_init_seed_corpus/null_val
+printf '\x03\x03\x04\x0a\xc0' > $OUT/fuzz_liblber_ber_init_seed_corpus/bitstring
+
+# BER encode seed corpus (command sequences)
+mkdir -p $OUT/fuzz_liblber_encode_seed_corpus
+# Encode an integer (opcode 0 + 4 bytes of value)
+printf '\x00\x00\x00\x00\x01' > $OUT/fuzz_liblber_encode_seed_corpus/encode_int
+# Encode a string (opcode 1 + 1 byte length + data)
+printf '\x01\x05hello' > $OUT/fuzz_liblber_encode_seed_corpus/encode_string
+# Encode a sequence with integer and string
+printf '\x05\x00\x00\x00\x00\x01\x01\x05hello\x06' > $OUT/fuzz_liblber_encode_seed_corpus/encode_seq
+# Encode boolean true
+printf '\x02\x01' > $OUT/fuzz_liblber_encode_seed_corpus/encode_bool
+# Encode null
+printf '\x03' > $OUT/fuzz_liblber_encode_seed_corpus/encode_null
+
+# Base64 seed corpus
+mkdir -p $OUT/fuzz_lutil_base64_seed_corpus
+echo -n "dGVzdA==" > $OUT/fuzz_lutil_base64_seed_corpus/test
+echo -n "SGVsbG8gV29ybGQ=" > $OUT/fuzz_lutil_base64_seed_corpus/hello_world
+echo -n "AAAA" > $OUT/fuzz_lutil_base64_seed_corpus/nulls
+echo -n "/////w==" > $OUT/fuzz_lutil_base64_seed_corpus/allff
+echo -n "YWJjZGVmZ2hpamtsbW5vcHFyc3R1dnd4eXo=" > $OUT/fuzz_lutil_base64_seed_corpus/alphabet
+echo -n "" > $OUT/fuzz_lutil_base64_seed_corpus/empty
+echo -n "QQ==" > $OUT/fuzz_lutil_base64_seed_corpus/single_char
 
 # Zip seed corpora
 cd $OUT

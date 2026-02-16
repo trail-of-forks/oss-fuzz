@@ -1,0 +1,35 @@
+# Base64 dictionary for OpenLDAP base64 encode/decode fuzzing
+
+# Base64 padding
+"="
+"=="
+
+# Common base64 strings
+"dGVzdA=="
+"SGVsbG8="
+"SGVsbG8gV29ybGQ="
+"AAAA"
+"/////w=="
+
+# Base64 alphabet boundary characters
+"+"
+"/"
+"A"
+"Z"
+"a"
+"z"
+"0"
+"9"
+
+# Line separators (used in MIME/PEM base64)
+"\x0a"
+"\x0d\x0a"
+
+# Invalid characters for error path testing
+"!"
+"@"
+"#"
+"\x00"
+
+# Multi-line base64 (76 char wrapped)
+"YWJjZGVmZ2hpamtsbW5vcHFyc3R1dnd4eXowMTIzNDU2Nzg5QUJDREVGR0hJSktMTU5PUFFS"
