@@ -11,12 +11,12 @@ limitations under the License.
 */
 
 /* FuzzClientRead.c - Tests client-side read operations with valid MBAP headers
- * Exercises FC 0x01, 0x02, 0x03, 0x04 response parsing
+ * Exercises FC 0x01, 0x02, 0x03, 0x04 response parsing and exception handling.
  * Constructs valid MBAP headers to pass pre_check_confirmation() and
  * fuzzes the response payload data.
  *
- * For register reads (FC 0x03, 0x04), also exercises the data conversion
- * functions (modbus_get_float_*) that convert register values to floats.
+ * Data conversion functions (modbus_get_float_*, integer macros) are covered
+ * by FuzzDataConversion.
  */
 
 #include <stdio.h>
@@ -52,13 +52,7 @@ static atomic_int g_shutdown = 0;
 /* Fuzzer input for current iteration */
 static const uint8_t *g_fuzz_data = NULL;
 static size_t g_fuzz_size = 0;
-
-/* Sinks for conversions to prevent optimization.
- * Separate elements ensure each call is preserved. */
-static float g_float_sink[4];
-static volatile int32_t g_int32_sink;
-static volatile int64_t g_int64_sink;
-static volatile int16_t g_int16_sink;
+static atomic_int g_fuzz_op = 0;
 
 /* Build MBAP header that passes pre_check_confirmation() */
 static void build_mbap_header(uint8_t *rsp, const uint8_t *req, int pdu_length) {
@@ -125,6 +119,7 @@ static void *server_thread(void *args) {
 
         const uint8_t *fuzz = g_fuzz_data;
         size_t fuzz_len = g_fuzz_size;
+        int op = atomic_load(&g_fuzz_op);
 
         int client_fd = accept(g_listen_fd, NULL, NULL);
         if (client_fd < 0) {
@@ -144,22 +139,32 @@ static void *server_thread(void *args) {
             uint8_t fc = request[7];
             int rsp_len = 0;
 
-            switch (fc) {
-            case 0x01: /* Read Coils */
-            case 0x02: /* Read Discrete Inputs */
-                rsp_len = build_read_bits_response(response, request, fuzz, fuzz_len);
-                break;
-            case 0x03: /* Read Holding Registers */
-            case 0x04: /* Read Input Registers */
-                rsp_len = build_read_registers_response(response, request, fuzz, fuzz_len);
-                break;
-            default:
-                /* Unknown FC - send exception response */
+            if (op == 4) {
+                /* Exception response */
                 build_mbap_header(response, request, 2);
-                response[7] = fc | 0x80;
-                response[8] = 0x01;  /* Illegal function */
+                uint8_t exc_fc = ((fuzz_len > 0 ? fuzz[0] : 1) % 4 + 1) | 0x80;
+                uint8_t exc_code = (fuzz_len > 1 ? fuzz[1] : 1) % 5 + 1;
+                response[7] = exc_fc;
+                response[8] = exc_code;
                 rsp_len = 9;
-                break;
+            } else {
+                switch (fc) {
+                case 0x01: /* Read Coils */
+                case 0x02: /* Read Discrete Inputs */
+                    rsp_len = build_read_bits_response(response, request, fuzz, fuzz_len);
+                    break;
+                case 0x03: /* Read Holding Registers */
+                case 0x04: /* Read Input Registers */
+                    rsp_len = build_read_registers_response(response, request, fuzz, fuzz_len);
+                    break;
+                default:
+                    /* Unknown FC - send exception response */
+                    build_mbap_header(response, request, 2);
+                    response[7] = fc | 0x80;
+                    response[8] = 0x01;  /* Illegal function */
+                    rsp_len = 9;
+                    break;
+                }
             }
 
             if (rsp_len > 0) send(client_fd, response, rsp_len, 0);
@@ -209,27 +214,29 @@ extern int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
     if (g_listen_fd < 0) return 0;
 
     /* Interpret fuzz data:
-     * data[0] % 4 = operation selector (FC 0x01-0x04)
+     * data[0] % 5 = operation selector (0-3: FC 0x01-0x04, 4: exception response)
      * data[1] = quantity (clamped to Modbus limits)
      * data[2...] = response payload data
      */
-    uint8_t op = data[0] % 4;
+    uint8_t op = data[0] % 5;
     uint16_t qty = (size > 1) ? data[1] : 10;
 
     /* Clamp quantity to Modbus limits */
     if (op < 2) {
-        /* Bits: max 2000 */
         if (qty == 0) qty = 1;
-        if (qty > 200) qty = 200;  /* Use smaller value for faster fuzzing */
-    } else {
-        /* Registers: max 125, min 2 for float conversion */
-        if (qty < 2) qty = 2;
+        if (qty > 200) qty = 200;
+    } else if (op < 4) {
+        if (qty == 0) qty = 1;
         if (qty > 125) qty = 125;
+    } else {
+        /* Exception path: quantity doesn't matter */
+        qty = 5;
     }
 
     /* Pass fuzz data starting from byte 2 */
     g_fuzz_data = (size > 2) ? data + 2 : data;
     g_fuzz_size = (size > 2) ? size - 2 : 0;
+    atomic_store(&g_fuzz_op, op);
     atomic_store(&g_state, 1);
 
     modbus_t *ctx = modbus_new_tcp("127.0.0.1", g_port);
@@ -262,74 +269,13 @@ extern int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
         modbus_read_input_bits(ctx, UT_INPUT_BITS_ADDRESS, qty, tab_bits);
         break;
     case 2: /* FC 0x03 - Read Holding Registers */
-        {
-            int nread = modbus_read_registers(ctx, UT_REGISTERS_ADDRESS, qty, tab_regs);
-            if (nread >= 2) {
-                /* Float conversions (modbus-data.c) — all byte order variants */
-                g_float_sink[0] = modbus_get_float_abcd(tab_regs);
-                g_float_sink[1] = modbus_get_float_dcba(tab_regs);
-                g_float_sink[2] = modbus_get_float_badc(tab_regs);
-                g_float_sink[3] = modbus_get_float_cdab(tab_regs);
-
-                /* Round-trip through set_float — exercises vuln3 (aliasing) */
-                uint16_t rt_dest[2];
-                modbus_set_float_abcd(g_float_sink[0], rt_dest);
-                modbus_set_float_dcba(g_float_sink[1], rt_dest);
-                modbus_set_float_badc(g_float_sink[2], rt_dest);
-                modbus_set_float_cdab(g_float_sink[3], rt_dest);
-
-                /* Integer conversions on client-received data — vuln2 pattern */
-                g_int32_sink = MODBUS_GET_INT32_FROM_INT16(tab_regs, 0);
-
-                /* SET macro round-trip */
-                uint16_t dest32[2];
-                MODBUS_SET_INT32_TO_INT16(dest32, 0, g_int32_sink);
-            }
-            if (nread >= 4) {
-                g_int64_sink = MODBUS_GET_INT64_FROM_INT16(tab_regs, 0);
-
-                uint16_t dest64[4];
-                MODBUS_SET_INT64_TO_INT16(dest64, 0, g_int64_sink);
-            }
-            /* INT16_FROM_INT8 on raw register bytes */
-            if (nread >= 1) {
-                g_int16_sink = MODBUS_GET_INT16_FROM_INT8(tab_regs, 0);
-            }
-        }
+        modbus_read_registers(ctx, UT_REGISTERS_ADDRESS, qty, tab_regs);
         break;
     case 3: /* FC 0x04 - Read Input Registers */
-        {
-            int nread = modbus_read_input_registers(ctx, UT_INPUT_REGISTERS_ADDRESS, qty, tab_regs);
-            if (nread >= 2) {
-                /* Float conversions (modbus-data.c) — all byte order variants */
-                g_float_sink[0] = modbus_get_float_abcd(tab_regs);
-                g_float_sink[1] = modbus_get_float_dcba(tab_regs);
-                g_float_sink[2] = modbus_get_float_badc(tab_regs);
-                g_float_sink[3] = modbus_get_float_cdab(tab_regs);
-
-                /* Round-trip through set_float — exercises vuln3 (aliasing) */
-                uint16_t rt_dest[2];
-                modbus_set_float_abcd(g_float_sink[0], rt_dest);
-                modbus_set_float_dcba(g_float_sink[1], rt_dest);
-                modbus_set_float_badc(g_float_sink[2], rt_dest);
-                modbus_set_float_cdab(g_float_sink[3], rt_dest);
-
-                /* Integer conversions on client-received data — vuln2 pattern */
-                g_int32_sink = MODBUS_GET_INT32_FROM_INT16(tab_regs, 0);
-
-                uint16_t dest32[2];
-                MODBUS_SET_INT32_TO_INT16(dest32, 0, g_int32_sink);
-            }
-            if (nread >= 4) {
-                g_int64_sink = MODBUS_GET_INT64_FROM_INT16(tab_regs, 0);
-
-                uint16_t dest64[4];
-                MODBUS_SET_INT64_TO_INT16(dest64, 0, g_int64_sink);
-            }
-            if (nread >= 1) {
-                g_int16_sink = MODBUS_GET_INT16_FROM_INT8(tab_regs, 0);
-            }
-        }
+        modbus_read_input_registers(ctx, UT_INPUT_REGISTERS_ADDRESS, qty, tab_regs);
+        break;
+    case 4: /* Exception response - exercise error handling */
+        modbus_read_registers(ctx, UT_REGISTERS_ADDRESS, qty, tab_regs);
         break;
     }
 

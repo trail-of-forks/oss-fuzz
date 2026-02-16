@@ -33,7 +33,7 @@ limitations under the License.
 #include <modbus.h>
 #include "unit-test.h"
 
-#define kMinInputLength 9
+#define kMinInputLength 3
 #define kMaxInputLength MODBUS_RTU_MAX_ADU_LENGTH
 
 /* Persistent state */
@@ -48,6 +48,9 @@ static atomic_int g_shutdown = 0;
 /* Fuzzer input for current iteration */
 static const uint8_t *g_fuzz_data = NULL;
 static size_t g_fuzz_size = 0;
+
+/* Response corruption flag (set from data[1] bit 0) */
+static atomic_int g_corrupt = 0;
 
 /* Build MBAP header that passes pre_check_confirmation() */
 static void build_mbap_header(uint8_t *rsp, const uint8_t *req, int pdu_length) {
@@ -178,7 +181,16 @@ static void *server_thread(void *args) {
                 break;
             }
 
-            if (rsp_len > 0) send(client_fd, response, rsp_len, 0);
+            /* Corrupt echo-type responses to exercise mismatch detection */
+            if (rsp_len > 0) {
+                int corrupt = atomic_load(&g_corrupt);
+                if (corrupt && rsp_len > 9 &&
+                    (fc == 0x05 || fc == 0x06 || fc == 0x0F ||
+                     fc == 0x10 || fc == 0x16)) {
+                    response[9] ^= 0xFF;
+                }
+                send(client_fd, response, rsp_len, 0);
+            }
         }
 
         close(client_fd);
@@ -224,8 +236,9 @@ extern int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
     if (size < kMinInputLength || size > kMaxInputLength) return 0;
     if (g_listen_fd < 0) return 0;
 
-    g_fuzz_data = data + 1;
-    g_fuzz_size = size - 1;
+    g_fuzz_data = (size > 2) ? data + 2 : data;
+    g_fuzz_size = (size > 2) ? size - 2 : 0;
+    atomic_store(&g_corrupt, data[1] & 1);
     atomic_store(&g_state, 1);
 
     modbus_t *ctx = modbus_new_tcp("127.0.0.1", g_port);
@@ -246,18 +259,36 @@ extern int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
         return 0;
     }
 
-    uint8_t tab_bits[256] = {0};
-    uint16_t tab_regs[128] = {0};
-    for (int i = 0; i < 128; i++) tab_regs[i] = (uint16_t)(i * 0x100 + i);
+    /* Fill tab_regs and tab_bits from fuzzer data */
+    uint8_t tab_bits[256];
+    uint16_t tab_regs[128];
+    const uint8_t *payload = (size > 2) ? data + 2 : data;
+    size_t payload_len = (size > 2) ? size - 2 : 0;
+
+    /* Fill tab_regs from fuzz data */
+    for (int i = 0; i < 128; i++) {
+        if (2 * i + 1 < (int)payload_len) {
+            tab_regs[i] = (uint16_t)(payload[2*i] << 8 | payload[2*i + 1]);
+        } else {
+            tab_regs[i] = 0;
+        }
+    }
+
+    /* Fill tab_bits from fuzz data */
+    for (int i = 0; i < 256 && i < (int)payload_len; i++) {
+        tab_bits[i] = payload[i] & 1;
+    }
+    memset(tab_bits + (payload_len < 256 ? payload_len : 256), 0,
+           256 - (payload_len < 256 ? payload_len : 256));
 
     uint8_t op = data[0] % 7;
 
     switch (op) {
     case 0: /* FC 0x05 */
-        modbus_write_bit(ctx, UT_BITS_ADDRESS, 1);
+        modbus_write_bit(ctx, UT_BITS_ADDRESS, tab_bits[0]);
         break;
     case 1: /* FC 0x06 */
-        modbus_write_register(ctx, UT_REGISTERS_ADDRESS, 0x1234);
+        modbus_write_register(ctx, UT_REGISTERS_ADDRESS, tab_regs[0]);
         break;
     case 2: /* FC 0x0F */
         modbus_write_bits(ctx, UT_BITS_ADDRESS, 10, tab_bits);
@@ -266,7 +297,7 @@ extern int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
         modbus_write_registers(ctx, UT_REGISTERS_ADDRESS, 10, tab_regs);
         break;
     case 4: /* FC 0x16 */
-        modbus_mask_write_register(ctx, UT_REGISTERS_ADDRESS, 0xFF00, 0x00FF);
+        modbus_mask_write_register(ctx, UT_REGISTERS_ADDRESS, tab_regs[0], tab_regs[1]);
         break;
     case 5: /* FC 0x17 - HIGH VALUE: fuzzer-controlled response data */
         modbus_write_and_read_registers(ctx, UT_REGISTERS_ADDRESS, 5, tab_regs,

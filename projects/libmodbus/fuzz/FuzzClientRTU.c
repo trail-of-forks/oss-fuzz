@@ -10,12 +10,13 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-/* FuzzServerRTU.c - Tests RTU backend with CRC-aware custom mutator
- * This fuzzer tests the RTU framing and CRC validation code paths
- * by using a custom mutator that ensures valid CRC-16 checksums.
+/* FuzzClientRTU.c - Tests RTU client response parsing with CRC-aware mutator
+ * This fuzzer tests the RTU client-side code paths including
+ * _modbus_rtu_recv(), _modbus_rtu_check_integrity() (client path),
+ * and RTU response length calculation.
  *
- * Uses pipe injection to feed fuzz data through the RTU backend,
- * exercising modbus_receive() and modbus_reply() code paths.
+ * Uses pipe injection to feed fuzz data as an RTU response frame,
+ * exercising modbus_receive_confirmation() code paths.
  */
 
 #include <stdio.h>
@@ -29,7 +30,6 @@ limitations under the License.
 #include <fcntl.h>
 
 #include <modbus.h>
-#include "unit-test.h"
 #include "modbus_crc16.h"
 
 #define RTU_MIN_ADU 4   /* slave + function + crc(2) */
@@ -37,8 +37,7 @@ limitations under the License.
 #define RTU_CRC_LEN 2
 
 /* Persistent state */
-static modbus_mapping_t *g_mb_mapping = NULL;
-static uint8_t *g_query = NULL;
+static uint8_t *g_response = NULL;
 
 /* External libFuzzer mutation function */
 extern size_t LLVMFuzzerMutate(uint8_t *Data, size_t Size, size_t MaxSize);
@@ -80,25 +79,10 @@ int LLVMFuzzerInitialize(int *argc, char ***argv) {
 
     signal(SIGPIPE, SIG_IGN);
 
-    /* Pre-allocate query buffer */
-    g_query = malloc(MODBUS_RTU_MAX_ADU_LENGTH);
-    if (g_query == NULL) {
+    /* Pre-allocate response buffer */
+    g_response = malloc(MODBUS_RTU_MAX_ADU_LENGTH);
+    if (g_response == NULL) {
         return -1;
-    }
-
-    /* Pre-allocate and initialize mapping */
-    g_mb_mapping = modbus_mapping_new_start_address(
-        UT_BITS_ADDRESS, UT_BITS_NB,
-        UT_INPUT_BITS_ADDRESS, UT_INPUT_BITS_NB,
-        UT_REGISTERS_ADDRESS, UT_REGISTERS_NB_MAX,
-        UT_INPUT_REGISTERS_ADDRESS, UT_INPUT_REGISTERS_NB);
-
-    if (g_mb_mapping != NULL) {
-        modbus_set_bits_from_bytes(g_mb_mapping->tab_input_bits, 0, UT_INPUT_BITS_NB,
-                                   UT_INPUT_BITS_TAB);
-        for (int i = 0; i < UT_INPUT_REGISTERS_NB; i++) {
-            g_mb_mapping->tab_input_registers[i] = UT_INPUT_REGISTERS_TAB[i];
-        }
     }
 
     return 0;
@@ -109,7 +93,7 @@ extern int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
         return 0;
     }
 
-    if (g_query == NULL || g_mb_mapping == NULL) {
+    if (g_response == NULL) {
         return 0;
     }
 
@@ -139,27 +123,26 @@ extern int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
     modbus_set_byte_timeout(ctx, 0, 100);        /* 100us */
 
     /* Set slave ID from fuzz input for filtering coverage */
-    uint8_t slave_id = data[0];
-    modbus_set_slave(ctx, slave_id);
+    modbus_set_slave(ctx, data[0]);
 
-    /* Write fuzz data to pipe */
+    /* Write fuzz data (RTU response frame) to pipe */
     ssize_t written = write(pipefd[1], data, size);
     (void)written;
     close(pipefd[1]);  /* Close write end - signals EOF */
 
-    /* Process through libmodbus RTU backend
+    /* Process through libmodbus RTU client path
      * This exercises:
      * - _modbus_rtu_select()
      * - _modbus_rtu_recv()
-     * - _modbus_rtu_check_integrity() - CRC validation
+     * - _modbus_rtu_check_integrity() (client path)
+     * - RTU response length calculation
      * - Slave ID filtering
      * - Function code parsing
+     *
+     * modbus_receive_confirmation() parses the response as a client would,
+     * unlike modbus_receive() which processes a request on the server side.
      */
-    int rc = modbus_receive(ctx, g_query);
-
-    if (rc > 0) {
-        modbus_reply(ctx, g_query, rc, g_mb_mapping);
-    }
+    modbus_receive_confirmation(ctx, g_response);
 
     /* Cleanup */
     close(pipefd[0]);

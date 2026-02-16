@@ -6,7 +6,7 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 SEEDS_DIR="$SCRIPT_DIR/seeds"
 
-mkdir -p "$SEEDS_DIR/server" "$SEEDS_DIR/client" "$SEEDS_DIR/clientread" "$SEEDS_DIR/rtu" "$SEEDS_DIR/dataconv"
+mkdir -p "$SEEDS_DIR/server" "$SEEDS_DIR/clientwrite" "$SEEDS_DIR/clientread" "$SEEDS_DIR/rtu" "$SEEDS_DIR/rtu_client" "$SEEDS_DIR/dataconv"
 
 echo "Generating FuzzServer seeds (requests)..."
 
@@ -61,51 +61,41 @@ echo -ne '\x00\x10\x00\x00\x00\x06\xff\x05\x01\x30\x12\x34' > "$SEEDS_DIR/server
 # Unknown function code 0x99
 echo -ne '\x00\x11\x00\x00\x00\x06\xff\x99\x00\x00\x00\x01' > "$SEEDS_DIR/server/fc_unknown.raw"
 
-echo "Generating FuzzClient seeds (responses)..."
+echo "Generating FuzzClientWrite seeds (write operations with fuzzable values)..."
 
-# FC 0x01 response: 5 bytes of coil data
-echo -ne '\x00\x01\x00\x00\x00\x08\xff\x01\x05\xcd\x6b\xb2\x0e\x1b' > "$SEEDS_DIR/client/rsp_fc01_read_coils.raw"
+# FuzzClientWrite seed format:
+# Byte 0: op selector (% 7)
+# Byte 1: corruption flag (bit 0)
+# Byte 2+: write values / response payload
 
-# FC 0x02 response: 3 bytes of discrete input data
-echo -ne '\x00\x02\x00\x00\x00\x06\xff\x02\x03\xac\xdb\x35' > "$SEEDS_DIR/client/rsp_fc02_read_discrete.raw"
+# FC 0x05 - Write single coil (op=0), no corruption
+echo -ne '\x00\x00\x01' > "$SEEDS_DIR/clientwrite/write_coil_on.raw"
+echo -ne '\x00\x01\x01' > "$SEEDS_DIR/clientwrite/write_coil_on_corrupt.raw"
 
-# FC 0x03 response: 6 bytes (3 registers)
-echo -ne '\x00\x03\x00\x00\x00\x09\xff\x03\x06\x02\x2b\x00\x01\x00\x64' > "$SEEDS_DIR/client/rsp_fc03_read_holding.raw"
+# FC 0x06 - Write single register (op=1), value 0x1234
+echo -ne '\x01\x00\x12\x34' > "$SEEDS_DIR/clientwrite/write_register.raw"
+echo -ne '\x01\x01\x12\x34' > "$SEEDS_DIR/clientwrite/write_register_corrupt.raw"
 
-# FC 0x04 response: 2 bytes (1 register)
-echo -ne '\x00\x04\x00\x00\x00\x05\xff\x04\x02\x00\x0a' > "$SEEDS_DIR/client/rsp_fc04_read_input.raw"
+# FC 0x0F - Write multiple coils (op=2)
+echo -ne '\x02\x00\x01\x00\x01\x01\x00\x00\x01\x01\x00' > "$SEEDS_DIR/clientwrite/write_coils.raw"
 
-# FC 0x05 response: echo of write coil ON
-echo -ne '\x00\x05\x00\x00\x00\x06\xff\x05\x01\x30\xff\x00' > "$SEEDS_DIR/client/rsp_fc05_write_coil.raw"
+# FC 0x10 - Write multiple registers (op=3)
+echo -ne '\x03\x00\x02\x2b\x00\x01\x00\x64\xaa\xbb\xcc\xdd\xee\xff\x11\x22\x33\x44\x55\x66' > "$SEEDS_DIR/clientwrite/write_registers.raw"
+echo -ne '\x03\x01\x02\x2b\x00\x01\x00\x64' > "$SEEDS_DIR/clientwrite/write_registers_corrupt.raw"
 
-# FC 0x06 response: echo of write register
-echo -ne '\x00\x06\x00\x00\x00\x06\xff\x06\x01\x60\x12\x34' > "$SEEDS_DIR/client/rsp_fc06_write_register.raw"
+# FC 0x16 - Mask write (op=4)
+echo -ne '\x04\x00\xff\x00\x00\xff' > "$SEEDS_DIR/clientwrite/mask_write.raw"
 
-# FC 0x0F response: write coils confirmation
-echo -ne '\x00\x07\x00\x00\x00\x06\xff\x0f\x01\x30\x00\x08' > "$SEEDS_DIR/client/rsp_fc0f_write_coils.raw"
+# FC 0x17 - Write/Read (op=5)
+echo -ne '\x05\x00\xaa\xbb\xcc\xdd\xee\xff' > "$SEEDS_DIR/clientwrite/write_and_read.raw"
 
-# FC 0x10 response: write registers confirmation
-echo -ne '\x00\x08\x00\x00\x00\x06\xff\x10\x01\x60\x00\x03' > "$SEEDS_DIR/client/rsp_fc10_write_regs.raw"
-
-# FC 0x11 response: Report slave ID
-echo -ne '\x00\x09\x00\x00\x00\x12\xff\x11\x0f\xb4\xff\x4c\x4d\x42\x33\x2e\x31\x2e\x31\x30\x00\x00\x00' > "$SEEDS_DIR/client/rsp_fc11_report_slave.raw"
-
-# FC 0x16 response: mask write echo
-echo -ne '\x00\x0a\x00\x00\x00\x08\xff\x16\x01\x60\x00\xf2\x00\x25' > "$SEEDS_DIR/client/rsp_fc16_mask_write.raw"
-
-# FC 0x17 response: write/read response
-echo -ne '\x00\x0b\x00\x00\x00\x09\xff\x17\x06\x02\x2b\x00\x01\x00\x64' > "$SEEDS_DIR/client/rsp_fc17_write_and_read.raw"
-
-# Exception responses
-echo -ne '\x00\x0c\x00\x00\x00\x03\xff\x81\x01' > "$SEEDS_DIR/client/rsp_exc_illegal_func.raw"
-echo -ne '\x00\x0d\x00\x00\x00\x03\xff\x81\x02' > "$SEEDS_DIR/client/rsp_exc_illegal_addr.raw"
-echo -ne '\x00\x0e\x00\x00\x00\x03\xff\x81\x03' > "$SEEDS_DIR/client/rsp_exc_illegal_value.raw"
-echo -ne '\x00\x0f\x00\x00\x00\x03\xff\x81\x04' > "$SEEDS_DIR/client/rsp_exc_server_failure.raw"
+# FC 0x11 - Report slave ID (op=6)
+echo -ne '\x06\x00\x0f\xb4\xff\x4c\x4d' > "$SEEDS_DIR/clientwrite/report_slave_id.raw"
 
 echo "Generating FuzzClientRead seeds (read operations with fuzzable payload)..."
 
 # FuzzClientRead seed format:
-# Byte 0: op selector (% 4 -> FC 0x01, 0x02, 0x03, 0x04)
+# Byte 0: op selector (% 5 -> FC 0x01-0x04 or exception)
 # Byte 1: quantity
 # Byte 2+: response payload data to fuzz
 
@@ -130,6 +120,13 @@ echo -ne '\x03\x02\xde\xad\xbe\xef' > "$SEEDS_DIR/clientread/read_input_2.raw"
 # Edge cases - max quantities
 echo -ne '\x00\xc8\xff\xff\xff\xff\xff' > "$SEEDS_DIR/clientread/read_coils_max.raw"
 echo -ne '\x02\x7d\xaa\xaa\xaa\xaa' > "$SEEDS_DIR/clientread/read_holding_max.raw"
+
+# Exception responses (op=4, data[0]%5==4)
+# data[2] % 4 + 1 = FC, data[3] % 5 + 1 = exception code
+echo -ne '\x04\x05\x00\x00' > "$SEEDS_DIR/clientread/exc_fc01_illegal_func.raw"
+echo -ne '\x04\x05\x01\x01' > "$SEEDS_DIR/clientread/exc_fc02_illegal_addr.raw"
+echo -ne '\x04\x05\x02\x02' > "$SEEDS_DIR/clientread/exc_fc03_illegal_value.raw"
+echo -ne '\x04\x05\x03\x03' > "$SEEDS_DIR/clientread/exc_fc04_server_failure.raw"
 
 echo "Generating FuzzDataConversion seeds (raw register/byte data)..."
 
@@ -216,15 +213,48 @@ append_crc '\x00\x06\x01\x60\x12\x34' "$SEEDS_DIR/rtu/broadcast_write.raw"
 # RTU FC 0x10: Write multiple registers
 append_crc '\x01\x10\x01\x60\x00\x02\x04\x00\x0a\x01\x02' "$SEEDS_DIR/rtu/fc10_write_registers.raw"
 
+echo "Generating FuzzClientRTU seeds (RTU response frames with CRC)..."
+
+# FuzzClientRTU seed format:
+# RTU response frames with valid CRC, processed by modbus_receive_confirmation()
+# data[0]: slave ID, data[1]: FC, data[2..N-2]: payload, data[N-2..N-1]: CRC
+
+# FC 0x03 response: slave=1, fc=0x03, byte_count=4, 2 registers of data
+append_crc '\x01\x03\x04\x00\x0a\x00\x14' "$SEEDS_DIR/rtu_client/rsp_fc03_2regs.raw"
+
+# FC 0x01 response: slave=1, fc=0x01, byte_count=1, 8 bits
+append_crc '\x01\x01\x01\xcd' "$SEEDS_DIR/rtu_client/rsp_fc01_8bits.raw"
+
+# FC 0x02 response: slave=1, fc=0x02, byte_count=2, 16 discrete inputs
+append_crc '\x01\x02\x02\xac\xdb' "$SEEDS_DIR/rtu_client/rsp_fc02_16bits.raw"
+
+# FC 0x04 response: slave=1, fc=0x04, byte_count=2, 1 input register
+append_crc '\x01\x04\x02\x00\x0a' "$SEEDS_DIR/rtu_client/rsp_fc04_1reg.raw"
+
+# FC 0x05 response: slave=1, echo write coil ON
+append_crc '\x01\x05\x01\x30\xff\x00' "$SEEDS_DIR/rtu_client/rsp_fc05_write_coil.raw"
+
+# FC 0x06 response: slave=1, echo write register
+append_crc '\x01\x06\x01\x60\x12\x34' "$SEEDS_DIR/rtu_client/rsp_fc06_write_reg.raw"
+
+# Exception response: slave=1, fc=0x83 (FC 0x03 | 0x80), exc_code=0x02
+append_crc '\x01\x83\x02' "$SEEDS_DIR/rtu_client/rsp_exc_fc03.raw"
+
+# Exception response: slave=1, fc=0x81, exc_code=0x01
+append_crc '\x01\x81\x01' "$SEEDS_DIR/rtu_client/rsp_exc_fc01.raw"
+
+# Broadcast response (slave=0)
+append_crc '\x00\x03\x04\xde\xad\xbe\xef' "$SEEDS_DIR/rtu_client/rsp_broadcast.raw"
+
 echo "Creating ZIP archives..."
 
 # Create ZIP archives for each fuzzer
 cd "$SEEDS_DIR"
 zip -j FuzzServer_seed_corpus.zip server/*.raw
-zip -j FuzzClient_seed_corpus.zip client/*.raw
-zip -j FuzzClientWrite_seed_corpus.zip client/*.raw  # Same responses work for client write
+zip -j FuzzClientWrite_seed_corpus.zip clientwrite/*.raw
 zip -j FuzzClientRead_seed_corpus.zip clientread/*.raw
 zip -j FuzzServerRTU_seed_corpus.zip rtu/*.raw
+zip -j FuzzClientRTU_seed_corpus.zip rtu_client/*.raw
 zip -j FuzzDataConversion_seed_corpus.zip dataconv/*.raw
 
 # Move to parent directory

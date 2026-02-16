@@ -12,8 +12,6 @@ limitations under the License.
 
 /* FuzzServer.c - Tests server-side request processing
  * Exercises modbus_receive() and modbus_reply() for all function codes.
- * Also exercises the integer conversion macros (MODBUS_GET_INT32_FROM_INT16, etc.)
- * on register data after write requests.
  */
 
 #include <stdio.h>
@@ -44,12 +42,6 @@ static int g_listen_fd = -1;
 static uint16_t g_port = 0;
 static modbus_mapping_t *g_mb_mapping = NULL;
 static uint8_t *g_query = NULL;
-
-/* Sinks for conversions to prevent optimization. */
-static volatile int32_t g_int32_sink;
-static volatile int64_t g_int64_sink;
-static volatile int16_t g_int16_sink;
-static volatile float g_float_sink[4];
 
 // Client thread state - using atomics for lock-free sync
 static pthread_t g_client_thread;
@@ -205,38 +197,6 @@ extern int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
     int rc = modbus_receive(ctx, g_query);
     if (rc > 0) {
         modbus_reply(ctx, g_query, rc, g_mb_mapping);
-
-        /* Exercise integer conversion macros on register data written by
-         * the (attacker-controlled) client request. */
-        if (g_mb_mapping->nb_registers >= 2) {
-            g_int32_sink = MODBUS_GET_INT32_FROM_INT16(g_mb_mapping->tab_registers, 0);
-
-            /* Float get/set round-trip on written registers — vuln1 + vuln3 */
-            g_float_sink[0] = modbus_get_float_abcd(g_mb_mapping->tab_registers);
-            g_float_sink[1] = modbus_get_float_dcba(g_mb_mapping->tab_registers);
-            g_float_sink[2] = modbus_get_float_badc(g_mb_mapping->tab_registers);
-            g_float_sink[3] = modbus_get_float_cdab(g_mb_mapping->tab_registers);
-
-            /* set_float round-trip — exercises vuln3 (strict aliasing) */
-            uint16_t rt_dest[2];
-            modbus_set_float_abcd(g_float_sink[0], rt_dest);
-            modbus_set_float_dcba(g_float_sink[1], rt_dest);
-            modbus_set_float_badc(g_float_sink[2], rt_dest);
-            modbus_set_float_cdab(g_float_sink[3], rt_dest);
-
-            /* SET macro for serialization — right-shift of negative values */
-            MODBUS_SET_INT32_TO_INT16(g_mb_mapping->tab_registers, 0, g_int32_sink);
-        }
-        if (g_mb_mapping->nb_registers >= 4) {
-            g_int64_sink = MODBUS_GET_INT64_FROM_INT16(g_mb_mapping->tab_registers, 0);
-            MODBUS_SET_INT64_TO_INT16(g_mb_mapping->tab_registers, 0, g_int64_sink);
-        }
-        /* INT16_FROM_INT8 on register byte data */
-        if (g_mb_mapping->nb_registers >= 1) {
-            g_int16_sink = MODBUS_GET_INT16_FROM_INT8(g_mb_mapping->tab_registers, 0);
-            uint8_t dest8[2];
-            MODBUS_SET_INT16_TO_INT8(dest8, 0, g_int16_sink);
-        }
     }
 
     // Cleanup
