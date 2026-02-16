@@ -6,7 +6,7 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 SEEDS_DIR="$SCRIPT_DIR/seeds"
 
-mkdir -p "$SEEDS_DIR/server" "$SEEDS_DIR/client" "$SEEDS_DIR/clientread" "$SEEDS_DIR/rtu"
+mkdir -p "$SEEDS_DIR/server" "$SEEDS_DIR/client" "$SEEDS_DIR/clientread" "$SEEDS_DIR/rtu" "$SEEDS_DIR/dataconv"
 
 echo "Generating FuzzServer seeds (requests)..."
 
@@ -131,6 +131,44 @@ echo -ne '\x03\x02\xde\xad\xbe\xef' > "$SEEDS_DIR/clientread/read_input_2.raw"
 echo -ne '\x00\xc8\xff\xff\xff\xff\xff' > "$SEEDS_DIR/clientread/read_coils_max.raw"
 echo -ne '\x02\x7d\xaa\xaa\xaa\xaa' > "$SEEDS_DIR/clientread/read_holding_max.raw"
 
+echo "Generating FuzzDataConversion seeds (raw register/byte data)..."
+
+# FuzzDataConversion seed format:
+# Bytes 0-7: 4 uint16_t registers (also used as float bits + INT16_FROM_INT8 input)
+# Bytes 8+: additional data for set_bits_from_bytes
+
+# All zeros — baseline
+echo -ne '\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00' > "$SEEDS_DIR/dataconv/all_zeros.raw"
+
+# All 0xFF — exercises max byte values in shifts (vuln1: 0xFF << 24)
+echo -ne '\xff\xff\xff\xff\xff\xff\xff\xff\x08\xff' > "$SEEDS_DIR/dataconv/all_ff.raw"
+
+# UT_REAL float 123456.00 = 0x47F12000 in ABCD order
+echo -ne '\x47\xf1\x20\x00\x47\xf1\x20\x00\x04\xab' > "$SEEDS_DIR/dataconv/ut_real_abcd.raw"
+
+# DCBA byte order
+echo -ne '\x00\x20\xf1\x47\x00\x20\xf1\x47\x04\xcd' > "$SEEDS_DIR/dataconv/ut_real_dcba.raw"
+
+# High byte >= 0x80 — triggers vuln1 (signed overflow in byte << 24)
+echo -ne '\x80\x00\x00\x00\x80\x00\x00\x00\x04\x55' > "$SEEDS_DIR/dataconv/high_byte_0x80.raw"
+echo -ne '\xff\x00\x00\x00\xff\x00\x00\x00\x04\xaa' > "$SEEDS_DIR/dataconv/high_byte_0xff.raw"
+
+# Register value >= 0x8000 — triggers vuln2 (MODBUS_GET_INT32_FROM_INT16 shift)
+echo -ne '\x80\x00\x00\x01\x80\x00\x00\x01\x04\x33' > "$SEEDS_DIR/dataconv/reg_0x8000.raw"
+echo -ne '\xff\xff\xff\xff\xff\xff\xff\xff\x04\x77' > "$SEEDS_DIR/dataconv/reg_0xffff.raw"
+
+# Negative float NaN patterns
+echo -ne '\x7f\xc0\x00\x00\x7f\xc0\x00\x00\x04\x11' > "$SEEDS_DIR/dataconv/nan_pattern.raw"
+echo -ne '\xff\x80\x00\x00\xff\x80\x00\x00\x04\x22' > "$SEEDS_DIR/dataconv/neg_inf.raw"
+
+# 64-bit conversion seeds (16+ bytes)
+echo -ne '\x80\x00\x00\x01\x00\x00\x00\x01\x80\x00\x00\x01\x00\x00\x00\x01' > "$SEEDS_DIR/dataconv/int64_high.raw"
+echo -ne '\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff' > "$SEEDS_DIR/dataconv/int64_all_ff.raw"
+
+# Bit utility edge cases — nb_bits boundary values
+echo -ne '\xaa\x00\x00\x00\x00\x00\x00\x00\x00\xaa' > "$SEEDS_DIR/dataconv/bits_0.raw"
+echo -ne '\xaa\x08\x00\x00\x00\x00\x00\x00\x00\xaa' > "$SEEDS_DIR/dataconv/bits_8.raw"
+
 echo "Generating RTU seeds (with CRC)..."
 
 # Helper function to append CRC to RTU message
@@ -187,6 +225,7 @@ zip -j FuzzClient_seed_corpus.zip client/*.raw
 zip -j FuzzClientWrite_seed_corpus.zip client/*.raw  # Same responses work for client write
 zip -j FuzzClientRead_seed_corpus.zip clientread/*.raw
 zip -j FuzzServerRTU_seed_corpus.zip rtu/*.raw
+zip -j FuzzDataConversion_seed_corpus.zip dataconv/*.raw
 
 # Move to parent directory
 mv *.zip ..

@@ -53,9 +53,12 @@ static atomic_int g_shutdown = 0;
 static const uint8_t *g_fuzz_data = NULL;
 static size_t g_fuzz_size = 0;
 
-/* Sinks for float conversions to prevent optimization.
+/* Sinks for conversions to prevent optimization.
  * Separate elements ensure each call is preserved. */
 static float g_float_sink[4];
+static volatile int32_t g_int32_sink;
+static volatile int64_t g_int64_sink;
+static volatile int16_t g_int16_sink;
 
 /* Build MBAP header that passes pre_check_confirmation() */
 static void build_mbap_header(uint8_t *rsp, const uint8_t *req, int pdu_length) {
@@ -259,23 +262,73 @@ extern int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
         modbus_read_input_bits(ctx, UT_INPUT_BITS_ADDRESS, qty, tab_bits);
         break;
     case 2: /* FC 0x03 - Read Holding Registers */
-        if (modbus_read_registers(ctx, UT_REGISTERS_ADDRESS, qty, tab_regs) >= 2) {
-            /* Exercise float conversion functions (modbus-data.c).
-             * Test all byte order variants. */
-            g_float_sink[0] = modbus_get_float_abcd(tab_regs);
-            g_float_sink[1] = modbus_get_float_dcba(tab_regs);
-            g_float_sink[2] = modbus_get_float_badc(tab_regs);
-            g_float_sink[3] = modbus_get_float_cdab(tab_regs);
+        {
+            int nread = modbus_read_registers(ctx, UT_REGISTERS_ADDRESS, qty, tab_regs);
+            if (nread >= 2) {
+                /* Float conversions (modbus-data.c) — all byte order variants */
+                g_float_sink[0] = modbus_get_float_abcd(tab_regs);
+                g_float_sink[1] = modbus_get_float_dcba(tab_regs);
+                g_float_sink[2] = modbus_get_float_badc(tab_regs);
+                g_float_sink[3] = modbus_get_float_cdab(tab_regs);
+
+                /* Round-trip through set_float — exercises vuln3 (aliasing) */
+                uint16_t rt_dest[2];
+                modbus_set_float_abcd(g_float_sink[0], rt_dest);
+                modbus_set_float_dcba(g_float_sink[1], rt_dest);
+                modbus_set_float_badc(g_float_sink[2], rt_dest);
+                modbus_set_float_cdab(g_float_sink[3], rt_dest);
+
+                /* Integer conversions on client-received data — vuln2 pattern */
+                g_int32_sink = MODBUS_GET_INT32_FROM_INT16(tab_regs, 0);
+
+                /* SET macro round-trip */
+                uint16_t dest32[2];
+                MODBUS_SET_INT32_TO_INT16(dest32, 0, g_int32_sink);
+            }
+            if (nread >= 4) {
+                g_int64_sink = MODBUS_GET_INT64_FROM_INT16(tab_regs, 0);
+
+                uint16_t dest64[4];
+                MODBUS_SET_INT64_TO_INT16(dest64, 0, g_int64_sink);
+            }
+            /* INT16_FROM_INT8 on raw register bytes */
+            if (nread >= 1) {
+                g_int16_sink = MODBUS_GET_INT16_FROM_INT8(tab_regs, 0);
+            }
         }
         break;
     case 3: /* FC 0x04 - Read Input Registers */
-        if (modbus_read_input_registers(ctx, UT_INPUT_REGISTERS_ADDRESS, qty, tab_regs) >= 2) {
-            /* Exercise float conversion functions (modbus-data.c).
-             * Test all byte order variants. */
-            g_float_sink[0] = modbus_get_float_abcd(tab_regs);
-            g_float_sink[1] = modbus_get_float_dcba(tab_regs);
-            g_float_sink[2] = modbus_get_float_badc(tab_regs);
-            g_float_sink[3] = modbus_get_float_cdab(tab_regs);
+        {
+            int nread = modbus_read_input_registers(ctx, UT_INPUT_REGISTERS_ADDRESS, qty, tab_regs);
+            if (nread >= 2) {
+                /* Float conversions (modbus-data.c) — all byte order variants */
+                g_float_sink[0] = modbus_get_float_abcd(tab_regs);
+                g_float_sink[1] = modbus_get_float_dcba(tab_regs);
+                g_float_sink[2] = modbus_get_float_badc(tab_regs);
+                g_float_sink[3] = modbus_get_float_cdab(tab_regs);
+
+                /* Round-trip through set_float — exercises vuln3 (aliasing) */
+                uint16_t rt_dest[2];
+                modbus_set_float_abcd(g_float_sink[0], rt_dest);
+                modbus_set_float_dcba(g_float_sink[1], rt_dest);
+                modbus_set_float_badc(g_float_sink[2], rt_dest);
+                modbus_set_float_cdab(g_float_sink[3], rt_dest);
+
+                /* Integer conversions on client-received data — vuln2 pattern */
+                g_int32_sink = MODBUS_GET_INT32_FROM_INT16(tab_regs, 0);
+
+                uint16_t dest32[2];
+                MODBUS_SET_INT32_TO_INT16(dest32, 0, g_int32_sink);
+            }
+            if (nread >= 4) {
+                g_int64_sink = MODBUS_GET_INT64_FROM_INT16(tab_regs, 0);
+
+                uint16_t dest64[4];
+                MODBUS_SET_INT64_TO_INT16(dest64, 0, g_int64_sink);
+            }
+            if (nread >= 1) {
+                g_int16_sink = MODBUS_GET_INT16_FROM_INT8(tab_regs, 0);
+            }
         }
         break;
     }
