@@ -65,8 +65,9 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
                                                            (size_t)(decoded_len + 1));
                             /* The decoded outputs must match */
                             if (redec_len == decoded_len) {
-                                /* Verify content matches — mismatch would be a bug */
-                                memcmp(decoded, redecoded, (size_t)decoded_len);
+                                if (memcmp(decoded, redecoded, (size_t)decoded_len) != 0) {
+                                    __builtin_trap();  /* Round-trip mismatch is a codec bug */
+                                }
                             }
                             free(redecoded);
                         }
@@ -95,7 +96,9 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
                     int dec_len = lutil_b64_pton(encoded, decoded, decode_buf_size);
                     /* Round-trip: decoded must match original input */
                     if (dec_len == (int)size) {
-                        memcmp(data, decoded, size);
+                        if (memcmp(data, decoded, size) != 0) {
+                            __builtin_trap();  /* Round-trip mismatch is a codec bug */
+                        }
                     }
                     free(decoded);
                 }

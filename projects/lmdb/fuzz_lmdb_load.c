@@ -9,6 +9,10 @@
  * internal tree manipulation logic that can only be reached through the
  * write API.
  *
+ * The environment is created once in LLVMFuzzerInitialize() and reused
+ * across iterations. Each iteration clears the database with mdb_drop()
+ * instead of recreating the directory, avoiding filesystem overhead.
+ *
  * Targets: mdb_put(), mdb_del(), B+ tree page splits, overflow pages,
  *          cursor positioning after modifications
  */
@@ -37,6 +41,12 @@ enum op_type {
     OP_GET,
 };
 
+/* Persistent state across fuzzer iterations */
+static MDB_env *g_env = NULL;
+static MDB_dbi g_dbi;
+static int g_dbi_opened = 0;
+static char g_tmpdir[64];
+
 static void cleanup_dir(const char *dir) {
     char buf[256];
     snprintf(buf, sizeof(buf), "%s/data.mdb", dir);
@@ -46,45 +56,71 @@ static void cleanup_dir(const char *dir) {
     rmdir(dir);
 }
 
-int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
-    if (size < 4) return 0;
+int LLVMFuzzerInitialize(int *argc, char ***argv) {
+    /* Use /dev/shm for RAM-backed I/O */
+    snprintf(g_tmpdir, sizeof(g_tmpdir), "/dev/shm/fuzz_lmdb_wr_XXXXXX");
+    if (!mkdtemp(g_tmpdir)) return 0;
 
-    /* Create temp directory for the database */
-    char tmpdir[] = "/tmp/fuzz_lmdb_wr_XXXXXX";
-    if (!mkdtemp(tmpdir)) return 0;
-
-    MDB_env *env = NULL;
-    MDB_txn *txn = NULL;
-    MDB_dbi dbi;
-    MDB_cursor *cursor = NULL;
-    int rc;
-
-    if (mdb_env_create(&env) != 0) goto cleanup;
-    mdb_env_set_mapsize(env, MAP_SIZE);
+    if (mdb_env_create(&g_env) != 0) {
+        cleanup_dir(g_tmpdir);
+        g_env = NULL;
+        return 0;
+    }
+    mdb_env_set_mapsize(g_env, MAP_SIZE);
 
     /*
      * MDB_NOSYNC: don't fsync (speed up fuzzing, we don't care about durability)
      * MDB_NOLOCK: no lock file needed for single-threaded fuzzer
      * MDB_WRITEMAP: use writable mmap (exercises different code paths)
      */
-    rc = mdb_env_open(env, tmpdir, MDB_NOSYNC | MDB_NOLOCK | MDB_WRITEMAP, 0644);
-    if (rc != 0) goto cleanup;
+    if (mdb_env_open(g_env, g_tmpdir, MDB_NOSYNC | MDB_NOLOCK | MDB_WRITEMAP, 0644) != 0) {
+        mdb_env_close(g_env);
+        cleanup_dir(g_tmpdir);
+        g_env = NULL;
+        return 0;
+    }
 
-    rc = mdb_txn_begin(env, NULL, 0, &txn);
-    if (rc != 0) goto cleanup;
+    /* Open the default database once */
+    MDB_txn *txn;
+    if (mdb_txn_begin(g_env, NULL, 0, &txn) != 0) {
+        mdb_env_close(g_env);
+        cleanup_dir(g_tmpdir);
+        g_env = NULL;
+        return 0;
+    }
+    if (mdb_dbi_open(txn, NULL, 0, &g_dbi) != 0) {
+        mdb_txn_abort(txn);
+        mdb_env_close(g_env);
+        cleanup_dir(g_tmpdir);
+        g_env = NULL;
+        return 0;
+    }
+    mdb_txn_commit(txn);
+    g_dbi_opened = 1;
 
-    rc = mdb_dbi_open(txn, NULL, 0, &dbi);
-    if (rc != 0) goto cleanup;
+    return 0;
+}
+
+int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
+    if (size < 4 || !g_env || !g_dbi_opened) return 0;
+
+    MDB_txn *txn = NULL;
+    MDB_cursor *cursor = NULL;
+    int rc;
+
+    /* Clear the database from the previous iteration */
+    rc = mdb_txn_begin(g_env, NULL, 0, &txn);
+    if (rc != 0) return 0;
+
+    mdb_drop(txn, g_dbi, 0);
 
     /* Interpret fuzz data as a stream of operations */
     const uint8_t *ptr = data;
     const uint8_t *end = data + size;
 
     while (ptr + 3 <= end) {
-        /* First byte: operation type */
         enum op_type op = *ptr++ % 4;
 
-        /* Second byte: key length (1-255, capped to MAX_KEY_SIZE) */
         uint8_t raw_key_len = *ptr++;
         size_t key_len = raw_key_len == 0 ? 1 : raw_key_len;
         if (key_len > MAX_KEY_SIZE) key_len = MAX_KEY_SIZE;
@@ -96,7 +132,6 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
         switch (op) {
             case OP_PUT:
             case OP_PUT_NOOVERWRITE: {
-                /* Next byte: value length */
                 if (ptr >= end) goto done_ops;
                 uint8_t raw_val_len = *ptr++;
                 size_t val_len = raw_val_len;
@@ -106,18 +141,18 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
                 ptr += val_len;
 
                 unsigned int flags = (op == OP_PUT_NOOVERWRITE) ? MDB_NOOVERWRITE : 0;
-                mdb_put(txn, dbi, &key, &val, flags);
+                mdb_put(txn, g_dbi, &key, &val, flags);
                 break;
             }
 
             case OP_DEL: {
-                mdb_del(txn, dbi, &key, NULL);
+                mdb_del(txn, g_dbi, &key, NULL);
                 break;
             }
 
             case OP_GET: {
                 MDB_val val;
-                mdb_get(txn, dbi, &key, &val);
+                mdb_get(txn, g_dbi, &key, &val);
                 break;
             }
         }
@@ -128,14 +163,17 @@ done_ops:
     rc = mdb_txn_commit(txn);
     txn = NULL;
 
-    if (rc != 0) goto cleanup;
+    if (rc != 0) return 0;
 
     /* Read back everything with a cursor to exercise tree traversal */
-    rc = mdb_txn_begin(env, NULL, MDB_RDONLY, &txn);
-    if (rc != 0) goto cleanup;
+    rc = mdb_txn_begin(g_env, NULL, MDB_RDONLY, &txn);
+    if (rc != 0) return 0;
 
-    rc = mdb_cursor_open(txn, dbi, &cursor);
-    if (rc != 0) goto cleanup;
+    rc = mdb_cursor_open(txn, g_dbi, &cursor);
+    if (rc != 0) {
+        mdb_txn_abort(txn);
+        return 0;
+    }
 
     MDB_val key, val;
     int count = 0;
@@ -153,10 +191,7 @@ done_ops:
         mdb_cursor_get(cursor, &key, &val, MDB_LAST);
     }
 
-cleanup:
-    if (cursor) mdb_cursor_close(cursor);
-    if (txn) mdb_txn_abort(txn);
-    if (env) mdb_env_close(env);
-    cleanup_dir(tmpdir);
+    mdb_cursor_close(cursor);
+    mdb_txn_abort(txn);
     return 0;
 }

@@ -65,29 +65,29 @@ LIBS_UNICODE="$SRC/openldap-install/lib/liblunicode.a \
               $SRC/openldap-install/lib/liblber.a \
               $SRC/openldap-install/lib/liblutil.a"
 
-# Tier 1: Server-exploitable harnesses (all use ber_get_next with sb_max_incoming)
+# Tier 2: BER wire-format parsing through Sockbuf (shared between client and server)
 
-# Server message parser - unauthenticated (256KB limit)
-$CC $CFLAGS $INCLUDES -c $SRC/fuzz_slapd_unauth.c -o fuzz_slapd_unauth.o
-$CXX $CXXFLAGS fuzz_slapd_unauth.o $LIBS $LIB_FUZZING_ENGINE -o $OUT/fuzz_slapd_unauth
+# Sockbuf BER framing + LDAP message parsing (256KB unauthenticated limit)
+$CC $CFLAGS $INCLUDES -c $SRC/fuzz_liblber_sockbuf.c -o fuzz_liblber_sockbuf.o
+$CXX $CXXFLAGS fuzz_liblber_sockbuf.o $LIBS $LIB_FUZZING_ENGINE -o $OUT/fuzz_liblber_sockbuf
 
-# Server message parser - authenticated (16MB limit)
-$CC $CFLAGS $INCLUDES -c $SRC/fuzz_slapd_auth.c -o fuzz_slapd_auth.o
-$CXX $CXXFLAGS fuzz_slapd_auth.o $LIBS $LIB_FUZZING_ENGINE -o $OUT/fuzz_slapd_auth
+# Sockbuf BER framing + LDAP message parsing (16MB authenticated limit)
+$CC $CFLAGS $INCLUDES -c $SRC/fuzz_liblber_sockbuf_auth.c -o fuzz_liblber_sockbuf_auth.o
+$CXX $CXXFLAGS fuzz_liblber_sockbuf_auth.o $LIBS $LIB_FUZZING_ENGINE -o $OUT/fuzz_liblber_sockbuf_auth
 
-# BER primitive decoders through server entry point
-$CC $CFLAGS $INCLUDES -c $SRC/fuzz_slapd_decode.c -o fuzz_slapd_decode.o
-$CXX $CXXFLAGS fuzz_slapd_decode.o $LIBS $LIB_FUZZING_ENGINE -o $OUT/fuzz_slapd_decode
+# BER primitive decoders through Sockbuf
+$CC $CFLAGS $INCLUDES -c $SRC/fuzz_liblber_sockbuf_decode.c -o fuzz_liblber_sockbuf_decode.o
+$CXX $CXXFLAGS fuzz_liblber_sockbuf_decode.o $LIBS $LIB_FUZZING_ENGINE -o $OUT/fuzz_liblber_sockbuf_decode
 
-# Nested/recursive structure parsing through server entry point
-$CC $CFLAGS $INCLUDES -c $SRC/fuzz_slapd_nested.c -o fuzz_slapd_nested.o
-$CXX $CXXFLAGS fuzz_slapd_nested.o $LIBS $LIB_FUZZING_ENGINE -o $OUT/fuzz_slapd_nested
+# Nested/recursive BER structure parsing through Sockbuf
+$CC $CFLAGS $INCLUDES -c $SRC/fuzz_liblber_sockbuf_nested.c -o fuzz_liblber_sockbuf_nested.o
+$CXX $CXXFLAGS fuzz_liblber_sockbuf_nested.o $LIBS $LIB_FUZZING_ENGINE -o $OUT/fuzz_liblber_sockbuf_nested
 
-# ASN.1 type variations through server entry point
-$CC $CFLAGS $INCLUDES -c $SRC/fuzz_slapd_types.c -o fuzz_slapd_types.o
-$CXX $CXXFLAGS fuzz_slapd_types.o $LIBS $LIB_FUZZING_ENGINE -o $OUT/fuzz_slapd_types
+# ASN.1 type variations through Sockbuf
+$CC $CFLAGS $INCLUDES -c $SRC/fuzz_liblber_sockbuf_types.c -o fuzz_liblber_sockbuf_types.o
+$CXX $CXXFLAGS fuzz_liblber_sockbuf_types.o $LIBS $LIB_FUZZING_ENGINE -o $OUT/fuzz_liblber_sockbuf_types
 
-# Unicode normalization (liblunicode)
+# Tier 1: Unicode normalization (genuinely server-exploitable via liblunicode)
 $CC $CFLAGS $INCLUDES_INTERNAL -c $SRC/fuzz_liblunicode_normalize.c -o fuzz_liblunicode_normalize.o
 $CXX $CXXFLAGS fuzz_liblunicode_normalize.o $LIBS_UNICODE $LIB_FUZZING_ENGINE -o $OUT/fuzz_liblunicode_normalize
 
@@ -100,10 +100,6 @@ $CXX $CXXFLAGS fuzz_libldap_dn.o $LIBS $LIB_FUZZING_ENGINE -o $OUT/fuzz_libldap_
 # URL parser (libldap client code)
 $CC $CFLAGS $INCLUDES -c $SRC/fuzz_libldap_url.c -o fuzz_libldap_url.o
 $CXX $CXXFLAGS fuzz_libldap_url.o $LIBS $LIB_FUZZING_ENGINE -o $OUT/fuzz_libldap_url
-
-# URL parser with filter component (libldap client code)
-$CC $CFLAGS $INCLUDES -c $SRC/fuzz_libldap_url_filter.c -o fuzz_libldap_url_filter.o
-$CXX $CXXFLAGS fuzz_libldap_url_filter.o $LIBS $LIB_FUZZING_ENGINE -o $OUT/fuzz_libldap_url_filter
 
 # Tier 3: Additional client library harnesses
 
@@ -152,9 +148,17 @@ cp $OUT/filter.dict $OUT/fuzz_libldap_filter.dict 2>/dev/null || true
 cp $OUT/ber.dict $OUT/fuzz_liblber_ber_init.dict 2>/dev/null || true
 cp $OUT/ber.dict $OUT/fuzz_liblber_encode.dict 2>/dev/null || true
 cp $OUT/base64.dict $OUT/fuzz_lutil_base64.dict 2>/dev/null || true
+cp $OUT/dn.dict $OUT/fuzz_libldap_dn.dict 2>/dev/null || true
+
+# Associate BER dictionary with Sockbuf-based harnesses
+cp $OUT/ber.dict $OUT/fuzz_liblber_sockbuf.dict 2>/dev/null || true
+cp $OUT/ber.dict $OUT/fuzz_liblber_sockbuf_auth.dict 2>/dev/null || true
+cp $OUT/ber.dict $OUT/fuzz_liblber_sockbuf_decode.dict 2>/dev/null || true
+cp $OUT/ber.dict $OUT/fuzz_liblber_sockbuf_nested.dict 2>/dev/null || true
+cp $OUT/ber.dict $OUT/fuzz_liblber_sockbuf_types.dict 2>/dev/null || true
 
 # Create seed corpora
-mkdir -p $OUT/fuzz_slapd_unauth_seed_corpus
+mkdir -p $OUT/fuzz_liblber_sockbuf_seed_corpus
 mkdir -p $OUT/fuzz_libldap_dn_seed_corpus
 mkdir -p $OUT/fuzz_libldap_url_seed_corpus
 mkdir -p $OUT/fuzz_liblunicode_normalize_seed_corpus
@@ -169,20 +173,20 @@ for ldif in $SRC/openldap/tests/data/*.ldif; do
 done
 
 # Create minimal BER seed corpus (hand-crafted valid structures)
-# These are minimal valid BER-encoded LDAP messages
 # LDAP BindRequest: SEQUENCE { msgid=1, BindRequest { version=3, name="", simple="" } }
-printf '\x30\x0c\x02\x01\x01\x60\x07\x02\x01\x03\x04\x00\x80\x00' > $OUT/fuzz_slapd_unauth_seed_corpus/bind_simple
+printf '\x30\x0c\x02\x01\x01\x60\x07\x02\x01\x03\x04\x00\x80\x00' > $OUT/fuzz_liblber_sockbuf_seed_corpus/bind_simple
 # LDAP SearchRequest minimal
-printf '\x30\x1d\x02\x01\x01\x63\x18\x04\x00\x0a\x01\x02\x0a\x01\x00\x02\x01\x00\x02\x01\x00\x01\x01\x00\x87\x00\x30\x00' > $OUT/fuzz_slapd_unauth_seed_corpus/search_minimal
+printf '\x30\x1d\x02\x01\x01\x63\x18\x04\x00\x0a\x01\x02\x0a\x01\x00\x02\x01\x00\x02\x01\x00\x01\x01\x00\x87\x00\x30\x00' > $OUT/fuzz_liblber_sockbuf_seed_corpus/search_minimal
 # Simple SEQUENCE with INTEGER
-printf '\x30\x03\x02\x01\x01' > $OUT/fuzz_slapd_unauth_seed_corpus/seq_int
+printf '\x30\x03\x02\x01\x01' > $OUT/fuzz_liblber_sockbuf_seed_corpus/seq_int
 # Nested SEQUENCEs
-printf '\x30\x08\x30\x06\x30\x04\x30\x02\x05\x00' > $OUT/fuzz_slapd_unauth_seed_corpus/nested_seq
+printf '\x30\x08\x30\x06\x30\x04\x30\x02\x05\x00' > $OUT/fuzz_liblber_sockbuf_seed_corpus/nested_seq
 
-# URL seeds
+# URL seeds (including filter component for coverage — replaces fuzz_libldap_url_filter)
 echo -n "ldap://localhost/dc=example,dc=com" > $OUT/fuzz_libldap_url_seed_corpus/basic
 echo -n "ldap://localhost:389/dc=example,dc=com?cn,sn?sub?(objectClass=*)" > $OUT/fuzz_libldap_url_seed_corpus/full
 echo -n "ldaps://localhost/dc=test??one?(cn=test)" > $OUT/fuzz_libldap_url_seed_corpus/ldaps
+echo -n "ldap://localhost/dc=test??sub?(cn=test)" > $OUT/fuzz_libldap_url_seed_corpus/url_with_filter
 
 # Unicode normalization seed corpus
 echo -n "Hello, World!" > $OUT/fuzz_liblunicode_normalize_seed_corpus/ascii

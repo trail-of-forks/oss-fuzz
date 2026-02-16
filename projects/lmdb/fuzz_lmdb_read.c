@@ -39,8 +39,8 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
         return 0;
     }
 
-    /* Write fuzz data to temp file */
-    char path[] = "/tmp/fuzz_lmdb_XXXXXX";
+    /* Write fuzz data to temp file (use /dev/shm for RAM-backed I/O) */
+    char path[] = "/dev/shm/fuzz_lmdb_XXXXXX";
     int fd = mkstemp(path);
     if (fd < 0) return 0;
 

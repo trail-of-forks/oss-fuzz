@@ -7,6 +7,7 @@ main_repo: 'https://github.com/LMDB/lmdb'
 sanitizers:
   - address
   - undefined
+  - memory
 architectures:
   - x86_64
 fuzzing_engines:

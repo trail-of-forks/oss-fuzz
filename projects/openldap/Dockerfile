@@ -26,4 +26,4 @@ RUN git clone --depth 1 https://git.openldap.org/openldap/openldap.git
 # (OpenLDAP tests contain BER-encoded messages)
 
 WORKDIR openldap
-COPY build.sh *.c *.dict *.py $SRC/
+COPY build.sh *.c *.h *.dict *.py $SRC/

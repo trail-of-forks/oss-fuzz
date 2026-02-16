@@ -10,7 +10,7 @@ function returns NULL.
 **File:** `libraries/libldap/schema.c`
 **Commit tested:** `1885843be4` (OpenLDAP master, tag `LMDB_0.9.34-23312`)
 **Last change to file:** `073232bbc7` (2024-03-26)
-**Severity:** Memory leak (denial of service via repeated triggering)
+**Severity:** Memory leak (code quality bug)
 
 ## Root Cause
 
@@ -145,11 +145,12 @@ The parser:
 6. `parse_qdescrs()` fails — next token after `X-\x8d` is `EOS`, not a quoted string
 7. Returns NULL without calling `LDAP_FREE(sval)` — **3 bytes leaked**
 
-### Remote trigger via cn=config (authenticated)
+### Where the affected code is called (server-side)
 
-An authenticated administrator can trigger this leak by sending an LDAP modify operation
-to `cn=config` with a malformed schema definition containing an `X-` extension followed
-by an unquoted value:
+On the server side, the affected parser functions are called when processing schema
+definitions via `cn=config`. An authenticated administrator modifying schema attributes
+(`olcAttributeTypes`, `olcObjectClasses`, `olcDitContentRules`) with a malformed `X-`
+extension will trigger the leak:
 
 ```bash
 # Requires admin credentials to cn=config
@@ -161,22 +162,22 @@ olcObjectClasses: ( 1.3.6.1.4.1.99999.1.1 NAME 'leakTest' SUP top STRUCTURAL X-L
 EOF
 ```
 
-Each such request leaks the `X-LEAK` token string (7 bytes). Repeated requests cause
-unbounded memory growth in the slapd process. The operation will fail (returning
-`LDAP_INVALID_SYNTAX`), but the memory is already leaked before the error is returned
-to the caller.
-
-The `olcAttributeTypes`, `olcObjectClasses`, and `olcDitContentRules` attributes in
-`cn=config` all pass through the affected parser functions.
+Each such request leaks the `X-LEAK` token string (7 bytes). The operation fails
+(returning `LDAP_INVALID_SYNTAX`), but the memory is already leaked before the error
+is returned. Triggering requires authenticated admin access, and each iteration leaks
+only a few bytes, so this is not a realistic DoS vector — it would take tens of millions
+of iterations to leak a significant amount of memory.
 
 ## Impact
 
-- **Denial of service**: An authenticated admin (or any user with write access to
-  `cn=config`) can cause unbounded memory growth in the slapd process by repeatedly
-  sending malformed schema definitions.
 - **Client-side impact**: Any application using `libldap` to parse schema strings
   (e.g., from LDAP search results on `cn=subschema`) will leak memory if the schema
-  contains malformed extensions.
+  contains malformed extensions. A malicious LDAP server returning crafted schema
+  definitions to a client could trigger repeated leaks.
+- **Server-side impact**: An authenticated admin with write access to `cn=config`
+  can trigger the leak by sending malformed schema definitions. Each iteration leaks
+  only a few bytes, so practical memory exhaustion would require sustained automated
+  requests over a long period.
 - **Long-running processes**: The leak accumulates across iterations since OpenLDAP's
   schema parser has no cleanup for this error path.
 
