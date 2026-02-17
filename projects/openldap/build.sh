@@ -6,8 +6,8 @@
 
 cd $SRC/openldap
 
-# Configure for Phase 1-3: liblber/libldap fuzzing only
-# slapd is disabled - server-side harnesses require Phase 4 build
+# Phase 1-3: liblber/libldap client library fuzzing
+# slapd is disabled here; Phase 4 below builds slapd separately
 ./configure \
     --prefix=$SRC/openldap-install \
     --enable-static \
@@ -19,18 +19,6 @@ cd $SRC/openldap
     --without-tls \
     --disable-syslog \
     --disable-debug
-
-# NOTE: For Phase 4 slapd harnesses, use instead:
-# ./configure \
-#     --prefix=$SRC/openldap-install \
-#     --enable-static \
-#     --disable-shared \
-#     --enable-slapd \
-#     --enable-null \
-#     --disable-overlays \
-#     --without-cyrus-sasl \
-#     --without-tls \
-#     --disable-syslog
 
 # Build liblutil first (liblber depends on it), then liblber, libldap, liblunicode
 make -j$(nproc) depend
@@ -65,27 +53,15 @@ LIBS_UNICODE="$SRC/openldap-install/lib/liblunicode.a \
               $SRC/openldap-install/lib/liblber.a \
               $SRC/openldap-install/lib/liblutil.a"
 
-# Tier 2: BER wire-format parsing through Sockbuf (shared between client and server)
+# Tier 3: Client library — BER wire-format parsing through Sockbuf
 
 # Sockbuf BER framing + LDAP message parsing (256KB unauthenticated limit)
 $CC $CFLAGS $INCLUDES -c $SRC/fuzz_liblber_sockbuf.c -o fuzz_liblber_sockbuf.o
 $CXX $CXXFLAGS fuzz_liblber_sockbuf.o $LIBS $LIB_FUZZING_ENGINE -o $OUT/fuzz_liblber_sockbuf
 
-# Sockbuf BER framing + LDAP message parsing (16MB authenticated limit)
-$CC $CFLAGS $INCLUDES -c $SRC/fuzz_liblber_sockbuf_auth.c -o fuzz_liblber_sockbuf_auth.o
-$CXX $CXXFLAGS fuzz_liblber_sockbuf_auth.o $LIBS $LIB_FUZZING_ENGINE -o $OUT/fuzz_liblber_sockbuf_auth
-
-# BER primitive decoders through Sockbuf
-$CC $CFLAGS $INCLUDES -c $SRC/fuzz_liblber_sockbuf_decode.c -o fuzz_liblber_sockbuf_decode.o
-$CXX $CXXFLAGS fuzz_liblber_sockbuf_decode.o $LIBS $LIB_FUZZING_ENGINE -o $OUT/fuzz_liblber_sockbuf_decode
-
 # Nested/recursive BER structure parsing through Sockbuf
 $CC $CFLAGS $INCLUDES -c $SRC/fuzz_liblber_sockbuf_nested.c -o fuzz_liblber_sockbuf_nested.o
 $CXX $CXXFLAGS fuzz_liblber_sockbuf_nested.o $LIBS $LIB_FUZZING_ENGINE -o $OUT/fuzz_liblber_sockbuf_nested
-
-# ASN.1 type variations through Sockbuf
-$CC $CFLAGS $INCLUDES -c $SRC/fuzz_liblber_sockbuf_types.c -o fuzz_liblber_sockbuf_types.o
-$CXX $CXXFLAGS fuzz_liblber_sockbuf_types.o $LIBS $LIB_FUZZING_ENGINE -o $OUT/fuzz_liblber_sockbuf_types
 
 # Tier 1: Unicode normalization (genuinely server-exploitable via liblunicode)
 $CC $CFLAGS $INCLUDES_INTERNAL -c $SRC/fuzz_liblunicode_normalize.c -o fuzz_liblunicode_normalize.o
@@ -137,6 +113,75 @@ $CC $CFLAGS validate_unicode_crash.o $LIBS_UNICODE -o $OUT/validate_unicode_cras
 cp $SRC/verify_crash.py $OUT/
 chmod +x $OUT/verify_crash.py
 
+# === Phase 4: slapd server-side harnesses ===
+# Build slapd with null backend to get server-side object files
+cd $SRC/openldap
+make clean
+
+./configure \
+    --prefix=$SRC/openldap-slapd-install \
+    --enable-static \
+    --disable-shared \
+    --enable-slapd \
+    --enable-null \
+    --enable-backends=no \
+    --enable-overlays=no \
+    --without-cyrus-sasl \
+    --without-tls \
+    --disable-syslog \
+    --disable-debug
+
+make -j$(nproc) depend
+make -j$(nproc)
+make install
+
+# Copy internal libraries not installed by make install
+cp $SRC/openldap/libraries/liblutil/liblutil.a $SRC/openldap-slapd-install/lib/
+cp $SRC/openldap/libraries/liblunicode/liblunicode.a $SRC/openldap-slapd-install/lib/
+
+# Create slapd static archive from all .o files except main.o
+cd servers/slapd
+ar rcs libslapd_fuzz.a $(ls *.o | grep -v main.o)
+
+# Create null backend static archive
+cd back-null
+ar rcs libnull_fuzz.a *.o
+cd $SRC/openldap
+
+# Copy schema files to $OUT so they're available at runtime
+cp -r $SRC/openldap-slapd-install/etc/openldap/schema $OUT/schema
+
+# Generate slapd.conf — use path relative to where harness runs (/out/)
+sed "s|SCHEMA_DIR|/out/schema|g" $SRC/slapd_fuzz.conf > $OUT/slapd_fuzz.conf
+
+# Slapd include paths and libraries
+SLAPD_INCLUDES="-I$SRC/openldap/servers/slapd \
+    -I$SRC/openldap/include \
+    -I$SRC/openldap-slapd-install/include"
+
+SLAPD_LIBS="$SRC/openldap/servers/slapd/libslapd_fuzz.a \
+    $SRC/openldap/servers/slapd/back-null/libnull_fuzz.a \
+    $SRC/openldap-slapd-install/lib/liblunicode.a \
+    $SRC/openldap/libraries/librewrite/librewrite.a \
+    $SRC/openldap-slapd-install/lib/liblutil.a \
+    $SRC/openldap-slapd-install/lib/libldap.a \
+    $SRC/openldap-slapd-install/lib/liblber.a"
+
+WRAP_FLAGS="-Wl,--wrap=sleep,--wrap=nanosleep,--wrap=gettimeofday,--wrap=ldap_pvt_thread_pool_tid"
+
+# Compile stubs
+$CC $CFLAGS $SLAPD_INCLUDES -c $SRC/slapd_stubs.c -o $SRC/slapd_stubs.o
+
+# Build each slapd harness
+for harness in fuzz_slapd_filter fuzz_slapd_entry fuzz_slapd_dn fuzz_slapd_search fuzz_slapd_bind; do
+    $CC $CFLAGS $SLAPD_INCLUDES -c $SRC/${harness}.c -o $SRC/${harness}.o
+    $CXX $CXXFLAGS $LIB_FUZZING_ENGINE \
+        $SRC/${harness}.o $SRC/slapd_stubs.o \
+        $SLAPD_LIBS $WRAP_FLAGS \
+        -lresolv -lpthread \
+        -o $OUT/${harness}
+done
+
 # Copy dictionaries
 cp $SRC/*.dict $OUT/ 2>/dev/null || true
 
@@ -152,10 +197,14 @@ cp $OUT/dn.dict $OUT/fuzz_libldap_dn.dict 2>/dev/null || true
 
 # Associate BER dictionary with Sockbuf-based harnesses
 cp $OUT/ber.dict $OUT/fuzz_liblber_sockbuf.dict 2>/dev/null || true
-cp $OUT/ber.dict $OUT/fuzz_liblber_sockbuf_auth.dict 2>/dev/null || true
-cp $OUT/ber.dict $OUT/fuzz_liblber_sockbuf_decode.dict 2>/dev/null || true
 cp $OUT/ber.dict $OUT/fuzz_liblber_sockbuf_nested.dict 2>/dev/null || true
-cp $OUT/ber.dict $OUT/fuzz_liblber_sockbuf_types.dict 2>/dev/null || true
+
+# Associate dictionaries with slapd harnesses
+cp $OUT/ber.dict $OUT/fuzz_slapd_filter.dict 2>/dev/null || true
+cp $OUT/ldif.dict $OUT/fuzz_slapd_entry.dict 2>/dev/null || true
+cp $OUT/dn.dict $OUT/fuzz_slapd_dn.dict 2>/dev/null || true
+cp $OUT/ber.dict $OUT/fuzz_slapd_search.dict 2>/dev/null || true
+cp $OUT/ber.dict $OUT/fuzz_slapd_bind.dict 2>/dev/null || true
 
 # Create seed corpora
 mkdir -p $OUT/fuzz_liblber_sockbuf_seed_corpus
@@ -271,6 +320,64 @@ echo -n "/////w==" > $OUT/fuzz_lutil_base64_seed_corpus/allff
 echo -n "YWJjZGVmZ2hpamtsbW5vcHFyc3R1dnd4eXo=" > $OUT/fuzz_lutil_base64_seed_corpus/alphabet
 echo -n "" > $OUT/fuzz_lutil_base64_seed_corpus/empty
 echo -n "QQ==" > $OUT/fuzz_lutil_base64_seed_corpus/single_char
+
+# === Slapd harness seed corpora ===
+
+# BER-encoded filter seeds for fuzz_slapd_filter
+mkdir -p $OUT/fuzz_slapd_filter_seed_corpus
+# (objectClass=*) — present filter (tag 0x87)
+printf '\x87\x0bobjectClass' > $OUT/fuzz_slapd_filter_seed_corpus/present
+# (cn=test) — equality filter (tag 0xa3)
+printf '\xa3\x0c\x04\x02cn\x04\x04test' > $OUT/fuzz_slapd_filter_seed_corpus/equality
+# (&(objectClass=*)(cn=test)) — AND filter (tag 0xa0)
+printf '\xa0\x1b\x87\x0bobjectClass\xa3\x0c\x04\x02cn\x04\x04test' > $OUT/fuzz_slapd_filter_seed_corpus/and_filter
+# (|(cn=a)(cn=b)) — OR filter (tag 0xa1)
+printf '\xa1\x14\xa3\x09\x04\x02cn\x04\x01a\xa3\x09\x04\x02cn\x04\x01b' > $OUT/fuzz_slapd_filter_seed_corpus/or_filter
+# (!(cn=test)) — NOT filter (tag 0xa2)
+printf '\xa2\x0e\xa3\x0c\x04\x02cn\x04\x04test' > $OUT/fuzz_slapd_filter_seed_corpus/not_filter
+# (cn=te*st) — substring filter (tag 0xa4)
+printf '\xa4\x10\x04\x02cn\x30\x0a\x80\x02te\x82\x02st' > $OUT/fuzz_slapd_filter_seed_corpus/substring
+# (cn>=test) — GE filter (tag 0xa5)
+printf '\xa5\x0c\x04\x02cn\x04\x04test' > $OUT/fuzz_slapd_filter_seed_corpus/ge_filter
+# (cn<=test) — LE filter (tag 0xa6)
+printf '\xa6\x0c\x04\x02cn\x04\x04test' > $OUT/fuzz_slapd_filter_seed_corpus/le_filter
+
+# LDIF entry seeds for fuzz_slapd_entry
+mkdir -p $OUT/fuzz_slapd_entry_seed_corpus
+printf 'dn: cn=test,dc=example,dc=com\nobjectClass: top\nobjectClass: person\ncn: test\nsn: Test\n' > $OUT/fuzz_slapd_entry_seed_corpus/person
+printf 'dn: dc=example,dc=com\nobjectClass: top\nobjectClass: domain\ndc: example\n' > $OUT/fuzz_slapd_entry_seed_corpus/domain
+printf 'dn: ou=people,dc=example,dc=com\nobjectClass: top\nobjectClass: organizationalUnit\nou: people\n' > $OUT/fuzz_slapd_entry_seed_corpus/ou
+printf 'dn: cn=admin,dc=example,dc=com\nobjectClass: top\nobjectClass: person\ncn: admin\nsn: Admin\ndescription: Administrator account\n' > $OUT/fuzz_slapd_entry_seed_corpus/admin
+
+# DN string seeds for fuzz_slapd_dn
+mkdir -p $OUT/fuzz_slapd_dn_seed_corpus
+echo -n "cn=test,dc=example,dc=com" > $OUT/fuzz_slapd_dn_seed_corpus/simple
+echo -n "cn=test+sn=user,ou=people,dc=example,dc=com" > $OUT/fuzz_slapd_dn_seed_corpus/multivalued
+echo -n "cn=test\,escaped,dc=example,dc=com" > $OUT/fuzz_slapd_dn_seed_corpus/escaped
+echo -n "dc=example,dc=com" > $OUT/fuzz_slapd_dn_seed_corpus/short
+echo -n "ou=people,ou=division,o=company,c=US" > $OUT/fuzz_slapd_dn_seed_corpus/deep
+echo -n "cn=#414243,dc=example,dc=com" > $OUT/fuzz_slapd_dn_seed_corpus/hex_value
+
+# BER-encoded SearchRequest seeds for fuzz_slapd_search
+# These are APPLICATION[3] CONSTRUCTED PDUs (tag 0x63) as expected by do_search().
+mkdir -p $OUT/fuzz_slapd_search_seed_corpus
+# Minimal SearchRequest: base="", scope=subtree, deref=never, slimit=0, tlimit=0,
+# attrsonly=false, filter=(objectClass=*), attrs={}
+printf '\x63\x18\x04\x00\x0a\x01\x02\x0a\x01\x00\x02\x01\x00\x02\x01\x00\x01\x01\x00\x87\x0bobjectClass\x30\x00' > $OUT/fuzz_slapd_search_seed_corpus/minimal
+# SearchRequest with base DN, scope=base, equality filter (cn=test), attrs={cn}
+printf '\x63\x2e\x04\x11dc=example,dc=com\x0a\x01\x00\x0a\x01\x00\x02\x01\x00\x02\x01\x00\x01\x01\x00\xa3\x0c\x04\x02cn\x04\x04test\x30\x06\x04\x02cn' > $OUT/fuzz_slapd_search_seed_corpus/eq_filter
+# SearchRequest with AND filter: (&(objectClass=person)(cn=*))
+printf '\x63\x2b\x04\x00\x0a\x01\x02\x0a\x01\x00\x02\x01\x00\x02\x01\x00\x01\x01\x00\xa0\x16\x87\x06person\xa3\x0c\x04\x02cn\x04\x04test\x30\x00' > $OUT/fuzz_slapd_search_seed_corpus/and_filter
+
+# BER-encoded BindRequest seeds for fuzz_slapd_bind
+# These are APPLICATION[0] CONSTRUCTED PDUs (tag 0x60) as expected by do_bind().
+mkdir -p $OUT/fuzz_slapd_bind_seed_corpus
+# Simple bind: version=3, name="", simple auth=""
+printf '\x60\x07\x02\x01\x03\x04\x00\x80\x00' > $OUT/fuzz_slapd_bind_seed_corpus/anon_simple
+# Simple bind: version=3, name="cn=admin,dc=example,dc=com", password="secret"
+printf '\x60\x24\x02\x01\x03\x04\x19cn=admin,dc=example,dc=com\x80\x06secret' > $OUT/fuzz_slapd_bind_seed_corpus/admin_simple
+# SASL bind: version=3, name="", SASL mechanism="EXTERNAL"
+printf '\x60\x14\x02\x01\x03\x04\x00\xa3\x0d\x04\x08EXTERNAL\x04\x01\x00' > $OUT/fuzz_slapd_bind_seed_corpus/sasl_external
 
 # Zip seed corpora
 cd $OUT

@@ -1,7 +1,7 @@
 /*
  * Harness: fuzz_liblber_sockbuf
  *
- * TIER:    2 (BER wire-format parsing, shared between client and server)
+ * TIER:    3 (Client Library - BER wire-format parsing)
  * TESTS:   BER framing and LDAP message parsing via Sockbuf I/O layer
  * PATH:    Sockbuf -> ber_get_next() -> ber_scanf() message parsing
  * CONFIG:  sb_max_incoming = 262143 (256KB - matches slapd unauthenticated default)
@@ -9,7 +9,8 @@
  * Tests BER framing and decoding through Sockbuf, which is the I/O
  * layer shared by slapd and libldap clients. Exercises ber_get_next()
  * with the unauthenticated message size limit, then parses the LDAP
- * message envelope and common operation types.
+ * message envelope and common operation types (Bind, Search, Unbind,
+ * Abandon, Modify, Add).
  *
  * Note: This harness links against libldap/liblber client libraries.
  * slapd server code (do_bind, do_search, get_filter0, etc.) is NOT
@@ -68,13 +69,14 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
 
     /* Parse LDAP message envelope:
      * LDAPMessage ::= SEQUENCE { messageID INTEGER, protocolOp CHOICE {...} }
-     */
-    tag = ber_scanf(ber, "{it", &msgid, &tag);
+     * Use separate variable for op_tag to avoid overwriting ber_scanf result. */
+    ber_tag_t op_tag;
+    tag = ber_scanf(ber, "{it", &msgid, &op_tag);
     if (tag == LBER_ERROR) {
         goto cleanup;
     }
 
-    switch (tag) {
+    switch (op_tag) {
         case 0x60:  /* BindRequest */
             {
                 ber_int_t version;
@@ -118,6 +120,40 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
             {
                 ber_int_t abandon_id;
                 ber_scanf(ber, "i", &abandon_id);
+            }
+            break;
+
+        case 0x66:  /* ModifyRequest */
+            {
+                struct berval dn;
+                tag = ber_scanf(ber, "{m", &dn);
+                if (tag != LBER_ERROR) {
+                    char *last = NULL;
+                    ber_len_t elem_len;
+                    ber_tag_t inner = ber_first_element(ber, &elem_len, &last);
+                    while (inner != LBER_DEFAULT) {
+                        struct berval mod;
+                        ber_skip_element(ber, &mod);
+                        inner = ber_next_element(ber, &elem_len, last);
+                    }
+                }
+            }
+            break;
+
+        case 0x68:  /* AddRequest */
+            {
+                struct berval dn;
+                tag = ber_scanf(ber, "{m", &dn);
+                if (tag != LBER_ERROR) {
+                    char *last = NULL;
+                    ber_len_t elem_len;
+                    ber_tag_t inner = ber_first_element(ber, &elem_len, &last);
+                    while (inner != LBER_DEFAULT) {
+                        struct berval attr;
+                        ber_skip_element(ber, &attr);
+                        inner = ber_next_element(ber, &elem_len, last);
+                    }
+                }
             }
             break;
 

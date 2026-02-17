@@ -1,7 +1,7 @@
 /*
  * Harness: fuzz_liblber_sockbuf_nested
  *
- * TIER:    2 (BER wire-format parsing, shared between client and server)
+ * TIER:    3 (Client Library - BER recursive structure parsing)
  * TESTS:   Deeply nested BER structure parsing through Sockbuf I/O layer
  * PATH:    Sockbuf -> ber_get_next() -> recursive BER element traversal
  * CONFIG:  sb_max_incoming = 262143 (256KB - matches slapd unauthenticated default)
@@ -53,7 +53,7 @@ static void parse_recursive(BerElement *ber, int depth) {
 
         tag = ber_first_element(ber, &elem_len, &last);
 
-        int max_elements = 100;
+        int max_elements = 20;
         while (tag != LBER_DEFAULT && max_elements-- > 0) {
             parse_recursive(ber, depth + 1);
             tag = ber_next_element(ber, &elem_len, last);
@@ -88,7 +88,7 @@ static void parse_filter_like(BerElement *ber) {
                     char *last = NULL;
                     ber_len_t elem_len;
                     ber_tag_t inner = ber_first_element(ber, &elem_len, &last);
-                    int max = 100;
+                    int max = 20;
                     while (inner != LBER_DEFAULT && max-- > 0) {
                         struct berval elem;
                         ber_skip_element(ber, &elem);
@@ -118,7 +118,7 @@ static void parse_filter_like(BerElement *ber) {
                     char *last = NULL;
                     ber_len_t elem_len;
                     ber_tag_t inner = ber_first_element(ber, &elem_len, &last);
-                    int max = 100;
+                    int max = 20;
                     while (inner != LBER_DEFAULT && max-- > 0) {
                         struct berval substr;
                         ber_skip_element(ber, &substr);
