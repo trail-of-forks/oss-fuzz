@@ -103,6 +103,24 @@ static int slapd_fuzz_init(int *argc, char ***argv,
         return -1;
     }
 
+    /* Disable the config backend's db_open.  config_back_db_open()
+     * builds the full cn=config DIT tree and calls through BackendInfo
+     * function pointers that our linker stubs leave uninitialized
+     * (ldif_back_initialize, monitor_back_initialize are no-ops).
+     * This causes a wild jump during startup.  The cn=config backend
+     * is not needed for fuzzing — we only need the schema (loaded by
+     * read_config above) and the null backend. */
+    {
+        BackendDB *b;
+        LDAP_STAILQ_FOREACH(b, &backendDB, be_next) {
+            if (b->bd_info && b->bd_info->bi_type &&
+                strcmp(b->bd_info->bi_type, "config") == 0) {
+                b->bd_info->bi_db_open = NULL;
+                break;
+            }
+        }
+    }
+
     if (slap_startup(NULL) != 0) {
         return -1;
     }
