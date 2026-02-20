@@ -15,6 +15,8 @@
 #
 ################################################################################
 
+cp $SRC/*.c $SRC/net-snmp/testing/fuzzing/
+
 # Globally disable leaks to let fuzzers continue.
 export ASAN_OPTIONS="detect_leaks=0"
 export CFLAGS="${CFLAGS} -Wno-error=declaration-after-statement"

@@ -20,3 +20,4 @@ RUN net-snmp/ci/install.sh
 WORKDIR net-snmp
 COPY build.sh $SRC/
 COPY *.dict $SRC/
+COPY *.c $SRC/
